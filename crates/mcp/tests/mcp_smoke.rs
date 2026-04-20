@@ -95,7 +95,7 @@ fn extract_text(result: &rmcp::model::CallToolResult) -> String {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_tools_returns_all_six() -> anyhow::Result<()> {
+async fn list_tools_returns_all_seven() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let chunks = ctx_store::LanceChunkStore::open(dir.path().join("lance"), 4).await?;
     let refs = ctx_store::RedbRefStore::open(dir.path().join("refs.redb"))?;
@@ -126,6 +126,7 @@ async fn list_tools_returns_all_six() -> anyhow::Result<()> {
         "find_references",
         "find_callers",
         "get_chunk",
+        "get_file_window",
         "repo_status",
     ];
     for expected_name in &expected {
@@ -136,8 +137,8 @@ async fn list_tools_returns_all_six() -> anyhow::Result<()> {
     }
     assert_eq!(
         names.len(),
-        6,
-        "expected exactly 6 tools, got {}",
+        7,
+        "expected exactly 7 tools, got {}",
         names.len()
     );
 

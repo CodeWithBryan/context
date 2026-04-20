@@ -87,6 +87,17 @@ pub struct HashArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct NoArgs {}
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FileWindowArgs {
+    /// Absolute file path, or path relative to the repo scope root. Must
+    /// resolve inside the scope — requests for files outside are rejected.
+    pub file: String,
+    /// 1-indexed inclusive start line.
+    pub start_line: u32,
+    /// 1-indexed inclusive end line.
+    pub end_line: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Server struct
 // ---------------------------------------------------------------------------
@@ -256,6 +267,99 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
             Ok(None) => serde_json::json!({"error": "chunk not found"}).to_string(),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
+    }
+
+    /// Read a line-bounded window of a file inside the repo scope.
+    ///
+    /// This is the fast path for "I searched, found a hit at line 54, now
+    /// show me lines 30-80 for context". One roundtrip, no chunker boundaries,
+    /// strictly cheaper than asking Claude to Read the full file.
+    #[tool(
+        description = "Read a specific line range of a file. FAST path after semantic_search: once you have file+lines from a hit, call this with start_line/end_line to grab surrounding context in a single roundtrip. Prefer this over Read for targeted exploration. Lines are 1-indexed and inclusive. Max 500 lines per call."
+    )]
+    #[instrument(skip(self), fields(file = %args.file, start = args.start_line, end = args.end_line))]
+    async fn get_file_window(&self, Parameters(args): Parameters<FileWindowArgs>) -> String {
+        const MAX_LINES: u32 = 500;
+
+        if args.start_line == 0 || args.end_line < args.start_line {
+            return serde_json::json!({
+                "error": "start_line must be >= 1 and end_line >= start_line (1-indexed inclusive)"
+            })
+            .to_string();
+        }
+        if args.end_line - args.start_line + 1 > MAX_LINES {
+            return serde_json::json!({
+                "error": format!("window exceeds {MAX_LINES}-line cap; narrow your range or issue multiple calls")
+            })
+            .to_string();
+        }
+
+        // Resolve the file path. Accept either absolute (must be inside
+        // scope root) or relative to scope root. Deny path traversal.
+        //
+        // Scope root is derived from `ctx serve`'s CWD — MCP clients spawn
+        // the server with CWD set to the repo root.
+        let scope_root_raw =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let Ok(scope_root) = std::fs::canonicalize(&scope_root_raw) else {
+            return serde_json::json!({
+                "error": format!("cannot resolve scope root: {}", scope_root_raw.display())
+            })
+            .to_string();
+        };
+        let requested = std::path::PathBuf::from(&args.file);
+        let resolved = if requested.is_absolute() {
+            requested
+        } else {
+            scope_root.join(requested)
+        };
+        let Ok(resolved) = std::fs::canonicalize(&resolved) else {
+            return serde_json::json!({
+                "error": format!("file not found: {}", resolved.display())
+            })
+            .to_string();
+        };
+        if !resolved.starts_with(&scope_root) {
+            return serde_json::json!({
+                "error": "path is outside the repo scope"
+            })
+            .to_string();
+        }
+
+        // Read + slice. Uses tokio for async file read.
+        let bytes = match tokio::fs::read(&resolved).await {
+            Ok(b) => b,
+            Err(e) => {
+                return serde_json::json!({"error": format!("read failed: {e}")}).to_string();
+            }
+        };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            return serde_json::json!({
+                "error": "file is not valid UTF-8"
+            })
+            .to_string();
+        };
+
+        let start_idx = (args.start_line - 1) as usize;
+        let end_idx_exclusive = args.end_line as usize;
+        let collected: Vec<&str> = text
+            .lines()
+            .skip(start_idx)
+            .take(end_idx_exclusive.saturating_sub(start_idx))
+            .collect();
+
+        let total_lines = u32::try_from(text.lines().count()).unwrap_or(u32::MAX);
+        let collected_count = u32::try_from(collected.len()).unwrap_or(u32::MAX);
+        let actual_end = args.start_line + collected_count.saturating_sub(1);
+
+        serde_json::json!({
+            "file": resolved.display().to_string(),
+            "start_line": args.start_line,
+            "end_line": actual_end,
+            "total_lines": total_lines,
+            "text": collected.join("\n"),
+        })
+        .to_string()
     }
 
     /// Return indexing status for the current repo scope.
