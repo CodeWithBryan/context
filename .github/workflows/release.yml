@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      reuse_build_run_id:
+        description: "Re-use the 'ctx-aarch64-apple-darwin-unsigned' artifact from a prior build run (skip rebuild). Leave empty to build fresh."
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +24,10 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.target }})
+    # Skip the expensive build job when the caller explicitly reuses a prior
+    # build artifact. Saves the ~$1 macos-xlarge run while iterating on the
+    # release / signing pipeline.
+    if: ${{ inputs.reuse_build_run_id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +93,7 @@ jobs:
   release:
     name: Sign, Notarize, and Publish
     needs: build
+    if: ${{ always() && (needs.build.result == 'success' || inputs.reuse_build_run_id != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,11 +102,21 @@ jobs:
       - name: Checkout (for README, LICENSE)
         uses: actions/checkout@v4
 
-      - name: Download unsigned binary
+      - name: Download unsigned binary (fresh build)
+        if: ${{ inputs.reuse_build_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
           name: ctx-aarch64-apple-darwin-unsigned
           path: unsigned/
+
+      - name: Download unsigned binary (reused from prior run ${{ inputs.reuse_build_run_id }})
+        if: ${{ inputs.reuse_build_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ctx-aarch64-apple-darwin-unsigned
+          path: unsigned/
+          run-id: ${{ inputs.reuse_build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Make binary executable
         run: chmod +x unsigned/ctx
@@ -144,17 +164,49 @@ jobs:
           chmod 600 api-key.json
           rm /tmp/AuthKey.p8
 
-      - name: Sign, notarize, and staple
+      # Sign only — rcodesign can't notarize a bare Mach-O directly; it needs
+      # a ZIP wrapper. We sign here, then zip + notarize manually below.
+      - name: Sign binary
         uses: indygreg/apple-code-sign-action@v1
         with:
           input_path: unsigned/ctx
           output_path: signed/ctx
           sign: true
-          notarize: true
-          staple: true
+          notarize: false
+          staple: false
           p12_file: cert.p12
           p12_password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
-          app_store_connect_api_key_json_file: api-key.json
+
+      - name: Install rcodesign CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="0.28.0"
+          URL="https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${V}/apple-codesign-${V}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL "$URL" -o /tmp/rcodesign.tar.gz
+          mkdir -p /tmp/rcodesign
+          tar -xzf /tmp/rcodesign.tar.gz -C /tmp/rcodesign --strip-components=1
+          sudo install -m 0755 /tmp/rcodesign/rcodesign /usr/local/bin/rcodesign
+          rcodesign --version
+
+      - name: Zip signed binary for notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x signed/ctx
+          cd signed && zip -9 ../ctx-notary.zip ctx && cd ..
+
+      - name: Submit to Apple notary service
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Bare Mach-O binaries can't be stapled — the notary ticket lives on
+          # Apple's servers and Gatekeeper fetches it on first run (requires
+          # network). So we just --wait (not --staple).
+          rcodesign notary-submit \
+            --api-key-file api-key.json \
+            --wait \
+            ctx-notary.zip
 
       - name: Package signed binary as tarball
         id: tarball
@@ -214,4 +266,4 @@ jobs:
 
       - name: Wipe secrets from disk
         if: always()
-        run: rm -rf cert.p12 api-key.json signed
+        run: rm -rf cert.p12 api-key.json signed ctx-notary.zip
