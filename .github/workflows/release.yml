@@ -23,8 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # xlarge = 12 CPU / 28 GB RAM. Cost per build is ~equivalent to the
+          # 3-CPU runner (same CPU-minutes) but wall clock finishes ~4× faster.
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-14-xlarge
             strip_cmd: strip -x
 
     runs-on: ${{ matrix.runner }}
