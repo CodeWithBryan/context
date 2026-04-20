@@ -10,6 +10,30 @@ name = "ctx"
 path = "src/main.rs"
 
 [dependencies]
+ctx-core = { path = "../core" }
+ctx-parse = { path = "../parse" }
+ctx-embed = { path = "../embed" }
+ctx-store = { path = "../store" }
+ctx-index = { path = "../index" }
+ctx-watch = { path = "../watch" }
+ctx-query = { path = "../query" }
+ctx-mcp = { path = "../mcp" }
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+toml.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+gix.workspace = true
+async-trait.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
 
 [lints]
 workspace = true

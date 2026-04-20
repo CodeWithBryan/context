@@ -32,6 +32,12 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
         }
     }
 
+    /// Construct a pipeline from pre-existing `Arc`s, allowing the same
+    /// store/embedder instances to be shared with a `Router` in `serve`.
+    pub fn new_shared(chunks: Arc<C>, refs: Arc<R>, embedder: Arc<E>) -> Self {
+        Self { chunks, refs, embedder }
+    }
+
     #[must_use]
     pub fn chunks(&self) -> Arc<C> {
         self.chunks.clone()
