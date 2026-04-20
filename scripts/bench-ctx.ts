@@ -44,14 +44,17 @@ const PER_QUESTION_TIMEOUT_MS = 180_000;
 const args = process.argv.slice(2);
 if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
   console.error(
-    "usage: bun run scripts/bench-ctx.ts <repo-dir> [--questions path.txt]",
+    "usage: bun run scripts/bench-ctx.ts <repo-dir> [--questions path.txt] [--runs N] [--concurrency N]",
   );
+  console.error("  --runs N         repeat the full question set N times and average (default 1)");
+  console.error("  --concurrency N  max parallel claude invocations (default 4)");
   process.exit(2);
 }
 
 const repoDir = args[0]!;
 let questions = DEFAULT_QUESTIONS;
 let concurrency = 4;
+let runs = 1;
 
 const qFileIdx = args.indexOf("--questions");
 if (qFileIdx >= 0 && args[qFileIdx + 1]) {
@@ -74,6 +77,16 @@ if (cIdx >= 0 && args[cIdx + 1]) {
     process.exit(2);
   }
   concurrency = n;
+}
+
+const rIdx = args.indexOf("--runs");
+if (rIdx >= 0 && args[rIdx + 1]) {
+  const n = Number.parseInt(args[rIdx + 1]!, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    console.error(`invalid --runs value: ${args[rIdx + 1]}`);
+    process.exit(2);
+  }
+  runs = n;
 }
 
 if (!existsSync(repoDir)) {
@@ -309,20 +322,23 @@ interface PairResult {
 
 type Label = "baseline" | "with-ctx";
 interface Job {
-  idx: number;
+  idx: number; // question index
+  run: number; // 0..runs-1
   label: Label;
   mcpCfg: string;
   question: string;
 }
 
 const jobs: Job[] = [];
-for (let i = 0; i < questions.length; i++) {
-  jobs.push({ idx: i, label: "baseline", mcpCfg: baselineCfg, question: questions[i]! });
-  jobs.push({ idx: i, label: "with-ctx", mcpCfg: withCtxCfg, question: questions[i]! });
+for (let r = 0; r < runs; r++) {
+  for (let i = 0; i < questions.length; i++) {
+    jobs.push({ idx: i, run: r, label: "baseline", mcpCfg: baselineCfg, question: questions[i]! });
+    jobs.push({ idx: i, run: r, label: "with-ctx", mcpCfg: withCtxCfg, question: questions[i]! });
+  }
 }
 
 console.error(
-  `\nrunning ${jobs.length} jobs (${questions.length} questions × 2 legs) at concurrency=${concurrency}\n`,
+  `\nrunning ${jobs.length} jobs (${questions.length} questions × 2 legs × ${runs} run${runs > 1 ? "s" : ""}) at concurrency=${concurrency}\n`,
 );
 
 // Pool: run up to `concurrency` jobs at once. Each slot pulls the next job
@@ -359,19 +375,44 @@ for (let w = 0; w < Math.min(concurrency, totalJobs); w++) {
 }
 await Promise.all(workers);
 
-// Reassemble results keyed by question index
+// Reassemble results: average across runs for each question.
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function collectPair(questionIdx: number): { baseline: RunResult; withCtx: RunResult } {
+  const labels: Label[] = ["baseline", "with-ctx"];
+  const out: Record<Label, RunResult> = {} as Record<Label, RunResult>;
+  for (const label of labels) {
+    const theseJobs = jobs
+      .map((j, i) => ({ job: j, idx: i }))
+      .filter(({ job }) => job.idx === questionIdx && job.label === label);
+    const rs = theseJobs.map(({ idx }) => jobResults[idx]!);
+    // Reduce to a single RunResult with mean values across runs.
+    const anyFail = rs.some((r) => !r.ok);
+    out[label] = {
+      ok: !anyFail,
+      wallMs: Math.round(mean(rs.map((r) => r.wallMs))),
+      inputTokens: Math.round(mean(rs.map((r) => r.inputTokens))),
+      cacheReadTokens: Math.round(mean(rs.map((r) => r.cacheReadTokens))),
+      outputTokens: Math.round(mean(rs.map((r) => r.outputTokens))),
+      costUsd: mean(rs.map((r) => r.costUsd)),
+      numTurns: Math.round(mean(rs.map((r) => r.numTurns))),
+      answer: rs[0]?.answer ?? "",
+      error: rs.find((r) => r.error)?.error,
+    };
+  }
+  return { baseline: out.baseline, withCtx: out["with-ctx"] };
+}
+
 const results: PairResult[] = [];
 for (let i = 0; i < questions.length; i++) {
-  const baselineJobIdx = jobs.findIndex(
-    (j) => j.idx === i && j.label === "baseline",
-  );
-  const withCtxJobIdx = jobs.findIndex(
-    (j) => j.idx === i && j.label === "with-ctx",
-  );
+  const { baseline, withCtx } = collectPair(i);
   results.push({
     question: questions[i]!,
-    baseline: jobResults[baselineJobIdx]!,
-    withCtx: jobResults[withCtxJobIdx]!,
+    baseline,
+    withCtx,
   });
 }
 
@@ -392,7 +433,9 @@ function fmtDelta(a: number, b: number): string {
 }
 
 console.log("\n## Benchmark results\n");
-console.log(`Repo: \`${repoDir}\`  ·  Questions: ${questions.length}\n`);
+console.log(
+  `Repo: \`${repoDir}\`  ·  Questions: ${questions.length}  ·  Runs/question: ${runs}  ·  Concurrency: ${concurrency}${runs > 1 ? "  ·  **values are mean across runs**" : ""}\n`,
+);
 
 console.log(
   "| # | Question | Time | In tokens | Out tokens | Cost |",
