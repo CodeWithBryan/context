@@ -58,13 +58,18 @@ use tracing::instrument;
 pub struct SemanticSearchArgs {
     /// Natural-language query string.
     pub query: String,
-    /// Maximum number of results to return (default: 10).
+    /// Maximum number of results to return (default: 5).
     #[serde(default = "default_k")]
     pub k: u32,
+    /// Include a short text preview per hit (default: false — cheaper).
+    /// When false, hits contain only file/lines/name/score/hash — the caller
+    /// follows up with `get_chunk(hash)` only for hits they want to read.
+    #[serde(default)]
+    pub with_preview: bool,
 }
 
 fn default_k() -> u32 {
-    10
+    5
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -140,18 +145,15 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
 impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxMcpServer<C, R, E> {
     /// Semantic search: find the k most relevant code chunks for a query.
     ///
-    /// Returns a compact summary (file, lines, name, kind, score, preview, hash)
-    /// per hit. Full chunk text is elided to stay within MCP token budgets; use
-    /// `get_chunk` with the hash to retrieve the full text when needed.
+    /// Default: returns ONLY (file, lines, name, score, hash). Cheap.
+    /// Pass `with_preview: true` to include a short text preview of each hit.
+    /// Use `get_chunk(hash)` to fetch the full text of any specific hit.
     #[tool(
-        description = "Semantic search over indexed code chunks for the current repo. Returns compact hits; use get_chunk(hash) for full text."
+        description = "Semantic search over indexed code. Returns file/lines/name/score/hash only by default (cheap). Follow up with get_chunk(hash) to read the full text of any hit. Pass with_preview=true to include a 200-char text preview per hit. Default k=5."
     )]
-    #[instrument(skip(self), fields(query = %args.query, k = args.k))]
+    #[instrument(skip(self), fields(query = %args.query, k = args.k, preview = args.with_preview))]
     async fn semantic_search(&self, Parameters(args): Parameters<SemanticSearchArgs>) -> String {
-        // Preview length trades token spend vs. snippet usefulness. 400 chars
-        // is enough for Claude to see surrounding context without exploding
-        // the response when k is large.
-        const PREVIEW_LEN: usize = 400;
+        const PREVIEW_LEN: usize = 200;
 
         match self
             .router
@@ -163,26 +165,29 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
                     .into_iter()
                     .map(|h| {
                         let c = &h.chunk;
-                        let text = c.text.as_str();
-                        // Ellipsis inside the preview signals truncation —
-                        // no separate `truncated` field needed.
-                        let preview = if text.len() > PREVIEW_LEN {
-                            let mut end = PREVIEW_LEN;
-                            while end > 0 && !text.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            format!("{}…", &text[..end])
-                        } else {
-                            text.to_string()
-                        };
-                        serde_json::json!({
+                        let mut obj = serde_json::json!({
                             "file": c.file,
                             "lines": format!("{}-{}", c.line_range.start, c.line_range.end),
                             "name": c.name,
                             "score": h.score,
                             "hash": c.hash.to_hex(),
-                            "preview": preview,
-                        })
+                        });
+                        if args.with_preview {
+                            let text = c.text.as_str();
+                            let preview = if text.len() > PREVIEW_LEN {
+                                let mut end = PREVIEW_LEN;
+                                while end > 0 && !text.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                format!("{}…", &text[..end])
+                            } else {
+                                text.to_string()
+                            };
+                            obj.as_object_mut()
+                                .expect("json!() returns an object")
+                                .insert("preview".into(), serde_json::Value::String(preview));
+                        }
+                        obj
                     })
                     .collect();
                 serde_json::to_string(&compact)
