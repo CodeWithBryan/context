@@ -1,3 +1,6 @@
+// TODO(Task 9): add `Watch(String)` variant when the notify-backed watcher lands.
+// Today watcher errors flow through `Other(anyhow::Error)`, which loses the
+// ability to pattern-match on them.
 #[derive(Debug, thiserror::Error)]
 pub enum CtxError {
     #[error("io: {0}")]
