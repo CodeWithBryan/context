@@ -13,7 +13,14 @@ ctx-embed = { path = "../embed" }
 # "macros" adds #[tool] / #[tool_router] / #[tool_handler] proc-macros.
 # "transport-io" adds rmcp::transport::stdio() (tokio stdin/stdout pair).
 # "client" is needed for the in-process duplex transport used in tests.
-rmcp = { workspace = true, features = ["server", "transport-io", "macros", "client"] }
+rmcp = { workspace = true, features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "macros",
+    "client",
+] }
+axum = "0.8"
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

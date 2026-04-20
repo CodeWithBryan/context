@@ -108,18 +108,70 @@ const tmp = mkdtempSync(join(tmpdir(), "ctx-bench-"));
 const baselineCfg = join(tmp, "baseline.json");
 const withCtxCfg = join(tmp, "with-ctx.json");
 writeFileSync(baselineCfg, JSON.stringify({ mcpServers: {} }));
+
+// Spawn ONE long-lived ctx HTTP server. All with-ctx Claude sessions connect
+// to it, so the embedder loads once for the whole bench instead of per run.
+// This matches realistic Claude Code usage (one ctx per repo session).
+const ctxPort = 7878 + Math.floor(Math.random() * 1000); // avoid clashes
+const ctxUrl = `http://127.0.0.1:${ctxPort}/mcp`;
+
+console.error(`spawning shared ctx HTTP server on ${ctxUrl}`);
+const ctxProc = Bun.spawn({
+  cmd: ["ctx", "serve", "--http", `127.0.0.1:${ctxPort}`, repoDir],
+  stdout: "pipe",
+  stderr: "pipe",
+  env: { ...process.env, RUST_LOG: "info" },
+});
+
+// Wait until the HTTP endpoint is accepting connections.
+async function waitForCtxReady(maxMs = 10_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      // A GET to /mcp returns 405 or similar once the server is up; we
+      // just care that the TCP connection + HTTP dispatch works.
+      const res = await fetch(ctxUrl, { method: "GET" });
+      if (res.status >= 100) return;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`ctx HTTP server did not become ready on ${ctxUrl}`);
+}
+
+try {
+  await waitForCtxReady();
+  console.error(`ctx ready on ${ctxUrl}`);
+} catch (e) {
+  ctxProc.kill();
+  const errText = await new Response(ctxProc.stderr).text();
+  console.error(`failed: ${(e as Error).message}\nctx stderr tail:\n${errText.slice(-800)}`);
+  process.exit(2);
+}
+
 writeFileSync(
   withCtxCfg,
   JSON.stringify({
     mcpServers: {
       ctx: {
-        command: "ctx",
-        args: ["serve"],
-        type: "stdio",
+        type: "http",
+        url: ctxUrl,
       },
     },
   }),
 );
+
+// Make sure we always clean up the subprocess + tmp dir on exit paths.
+process.on("exit", () => {
+  try {
+    ctxProc.kill();
+  } catch {}
+});
+process.on("SIGINT", () => {
+  ctxProc.kill();
+  process.exit(130);
+});
 
 // ──────────────────────────────────────────────────────────────────────────
 // Run one question
@@ -401,4 +453,9 @@ console.log(
 
 // Exit non-zero if any run failed, so CI can gate on it
 const anyFail = results.some((r) => !r.baseline.ok || !r.withCtx.ok);
+
+// Explicit cleanup — the `exit` handler above is best-effort.
+try {
+  ctxProc.kill();
+} catch {}
 process.exit(anyFail ? 1 : 0);

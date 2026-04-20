@@ -148,6 +148,61 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
     }
 }
 
+impl<C, R, E> CtxMcpServer<C, R, E>
+where
+    C: ChunkStore + 'static,
+    R: RefStore + 'static,
+    E: Embedder + 'static,
+{
+    /// Serve over HTTP (streamable HTTP / SSE). A single long-lived server
+    /// that can accept many concurrent MCP clients — useful for benchmarking,
+    /// multi-tab usage, or sharing a ctx instance across sessions.
+    ///
+    /// Mount path is `/mcp`; final URL is `http://<addr>/mcp`.
+    ///
+    /// # Errors
+    /// Returns an error if binding or serving fails.
+    pub async fn serve_http(self, addr: std::net::SocketAddr) -> Result<(), anyhow::Error>
+    where
+        Self: Clone,
+    {
+        use rmcp::transport::streamable_http_server::{
+            session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        };
+
+        // The factory is invoked once per session. Clone the handler — the
+        // heavy state (Router/Arc<Embedder>/etc.) is already behind Arc and
+        // cheap to clone.
+        let template = self;
+        let service = StreamableHttpService::new(
+            move || Ok(template.clone()),
+            std::sync::Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default(),
+        );
+
+        let router = axum::Router::new().nest_service("/mcp", service);
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("ctx MCP HTTP server listening on http://{addr}/mcp");
+        axum::serve(listener, router).await?;
+        Ok(())
+    }
+}
+
+impl<C, R, E> Clone for CtxMcpServer<C, R, E>
+where
+    C: ChunkStore + 'static,
+    R: RefStore + 'static,
+    E: Embedder + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            router: self.router.clone(),
+            scope: self.scope.clone(),
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------

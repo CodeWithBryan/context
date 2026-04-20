@@ -51,10 +51,15 @@ enum Cmd {
         #[arg(long)]
         full: bool,
     },
-    /// Start the watcher + MCP stdio server.
+    /// Start the watcher + MCP server (stdio by default; HTTP with --http).
     Serve {
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Serve MCP over HTTP instead of stdio. Bind address, e.g.
+        /// `127.0.0.1:7878`. Useful for long-running ctx shared across
+        /// multiple MCP clients (benchmarks, parallel Claude sessions).
+        #[arg(long, value_name = "HOST:PORT")]
+        http: Option<String>,
     },
     /// Print index health.
     Status {
@@ -76,7 +81,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Init { path } => commands::init::run(&path).await,
         Cmd::Index { path, full: _ } => commands::index::run(&path).await,
-        Cmd::Serve { path } => commands::serve::run(&path).await,
+        Cmd::Serve { path, http } => commands::serve::run(&path, http.as_deref()).await,
         Cmd::Status { path } => commands::status::run(&path).await,
         Cmd::Update { force } => {
             // self_update uses blocking I/O; run off the async executor.

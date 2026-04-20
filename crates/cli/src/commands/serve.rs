@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-pub async fn run(path: &Path) -> Result<()> {
+pub async fn run(path: &Path, http: Option<&str>) -> Result<()> {
     let abs = crate::config::canonicalize_repo(path)?;
     crate::config::ensure_per_repo_dirs(&abs)?;
 
@@ -66,9 +66,17 @@ pub async fn run(path: &Path) -> Result<()> {
         }
     });
 
-    // MCP server on the foreground — runs until stdin closes.
+    // MCP server on the foreground.
     let router = Router::new(chunks, refs, embedder);
     let server: ProductionCtxMcpServer = CtxMcpServer::new(Arc::new(router), scope);
-    server.serve_stdio().await?;
+
+    if let Some(addr_str) = http {
+        let addr: std::net::SocketAddr = addr_str
+            .parse()
+            .with_context(|| format!("invalid --http address: {addr_str}"))?;
+        server.serve_http(addr).await?;
+    } else {
+        server.serve_stdio().await?;
+    }
     Ok(())
 }
