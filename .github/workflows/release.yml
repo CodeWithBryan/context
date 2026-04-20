@@ -259,7 +259,10 @@ jobs:
           cp signed/ctx staging/
           chmod +x staging/ctx
           cp README.md LICENSE staging/
-          tar -czf "dist/${ARCHIVE_NAME}" -C staging .
+          # Use explicit filenames (NOT '.') so entries are 'ctx'/'README.md'/'LICENSE'
+          # at the tar root. `self_update` walks the archive looking for an
+          # entry path == bin_name, and won't match './ctx'.
+          tar -czf "dist/${ARCHIVE_NAME}" -C staging ctx README.md LICENSE
           echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Create `latest` alias
