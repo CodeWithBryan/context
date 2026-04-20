@@ -3,6 +3,7 @@
 pub mod error;
 pub mod hash;
 pub mod scope;
+pub mod traits;
 pub mod types;
 
 pub use error::{CtxError, Result};
