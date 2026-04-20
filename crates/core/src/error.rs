@@ -13,6 +13,8 @@ pub enum CtxError {
     Embed(String),
     #[error("symbol: {0}")]
     Symbol(String),
+    #[error("unimplemented: {0}")]
+    Unimplemented(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

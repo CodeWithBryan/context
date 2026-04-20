@@ -13,6 +13,10 @@ pub struct Filter {
     pub path_glob: Option<String>,
 }
 
+// async_trait is required because these traits are used behind `Box<dyn ...>` and
+// `Arc<dyn ...>` (see Task 6 LanceChunkStore, Task 10 Router). Native async fn in
+// traits are not dyn-compatible in Rust 1.94. Revisit once `dynosaur` or a
+// stable stdlib path lands.
 #[async_trait]
 pub trait ChunkStore: Send + Sync {
     async fn upsert(&self, chunks: &[Chunk]) -> Result<()>;
@@ -27,6 +31,10 @@ pub enum SymbolQuery {
     Definition { name: String },
     References { name: String },
     Callers { name: String },
+    /// Not yet implemented in Phase 1 — `RefStore` impls must return
+    /// `Err(CtxError::Unimplemented(...))` rather than an empty `Vec`.
+    /// Implementation is scheduled for a later task when the ref-by-file
+    /// index is added.
     ByFile { file: String },
 }
 
@@ -42,7 +50,7 @@ pub trait RefStore: Send + Sync {
 
 #[async_trait]
 pub trait Embedder: Send + Sync {
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     fn dim(&self) -> usize;
     fn model_id(&self) -> &str;
 }
