@@ -32,3 +32,45 @@ fn tsserver_graceful_degradation_when_missing() {
     // Either way, should not panic. Success or clean error.
     let _ = result;
 }
+
+/// Fix 7: verify that `try_spawn` returns `Ok(None)` — not `Err` — when tsserver
+/// is absent, confirming graceful degradation.
+#[tokio::test]
+async fn try_spawn_returns_none_when_tsserver_missing() {
+    let tmp = std::env::temp_dir()
+        .join(format!("ctx-test-none-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).ok();
+    // Clear any env override so we truly test the "nothing found" path.
+    let _guard = TempEnv::remove("CTX_TSSERVER_PATH");
+    let res = TsServer::try_spawn(&tmp).await;
+    match res {
+        Ok(None) => {} // expected: graceful degradation
+        Ok(Some(_)) => panic!("expected None when tsserver not present"),
+        Err(e) => panic!("try_spawn should not error on missing tsserver, got: {e:?}"),
+    }
+}
+
+/// Minimal helper to scope env-var changes within a test without an
+/// external crate.
+struct TempEnv {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl TempEnv {
+    fn remove(key: &'static str) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self { key, prev }
+    }
+}
+
+impl Drop for TempEnv {
+    fn drop(&mut self) {
+        if let Some(prev) = &self.prev {
+            std::env::set_var(self.key, prev);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}

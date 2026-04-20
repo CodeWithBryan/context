@@ -15,6 +15,9 @@ pub struct TsServer {
     stdin: Arc<Mutex<ChildStdin>>,
     stdout: Arc<Mutex<BufReader<ChildStdout>>>,
     seq: AtomicI64,
+    /// Serializes entire write→read cycles so concurrent callers don't
+    /// interleave responses (Fix 2).
+    request_lock: Mutex<()>,
 }
 
 impl TsServer {
@@ -27,7 +30,7 @@ impl TsServer {
         cmd.arg(&tsserver_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped()) // Fix 6: pipe stderr for debuggability
             .current_dir(project_root);
         let mut child =
             cmd.spawn().map_err(|e| CtxError::Symbol(format!("spawn node: {e}")))?;
@@ -35,15 +38,74 @@ impl TsServer {
             child.stdin.take().ok_or_else(|| CtxError::Symbol("no stdin".into()))?;
         let stdout =
             child.stdout.take().ok_or_else(|| CtxError::Symbol("no stdout".into()))?;
+        // Fix 6: forward tsserver stderr lines to tracing::debug!
+        let stderr =
+            child.stderr.take().ok_or_else(|| CtxError::Symbol("no stderr".into()))?;
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) = reader.read_line(&mut line).await {
+                if n == 0 {
+                    break;
+                }
+                debug!("tsserver stderr: {}", line.trim());
+                line.clear();
+            }
+        });
         Ok(Self {
             child: Mutex::new(child),
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
             seq: AtomicI64::new(1),
+            request_lock: Mutex::new(()),
         })
     }
 
+    /// Try to spawn a `TsServer` for the given project. Returns `Ok(None)` if
+    /// tsserver is not available (logged as a warning); returns `Ok(Some(...))`
+    /// if successful; returns `Err` only on genuine unexpected failures (e.g.
+    /// Node process spawn failed for reasons other than missing binary).
+    // `async` kept intentionally: callers use `.await` and future versions
+    // may perform async work (e.g. waiting for the process to be ready).
+    #[allow(clippy::unused_async)]
+    pub async fn try_spawn(project_root: &Path) -> Result<Option<TsServer>> {
+        match TsServer::spawn(project_root) {
+            Ok(server) => Ok(Some(server)),
+            Err(CtxError::Symbol(msg)) if msg.starts_with("tsserver not found") => {
+                warn!("tsserver unavailable: {msg} — TS structural queries disabled");
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Send a notification (no response expected). Fix 1.
+    async fn notify(&self, command: &str, arguments: Value) -> Result<()> {
+        let seq = self.seq.fetch_add(1, Ordering::SeqCst);
+        let msg = json!({
+            "seq": seq,
+            "type": "request",
+            "command": command,
+            "arguments": arguments
+        });
+        let req_bytes = format!("{msg}\n").into_bytes();
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(&req_bytes)
+            .await
+            .map_err(|e| CtxError::Symbol(format!("stdin write: {e}")))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| CtxError::Symbol(format!("stdin flush: {e}")))?;
+        Ok(())
+    }
+
     async fn request(&self, command: &str, arguments: Value) -> Result<Value> {
+        // Fix 2: acquire gate for the full write→read cycle to prevent
+        // concurrent requests from interleaving responses.
+        let _gate = self.request_lock.lock().await;
+
         let seq = self.seq.fetch_add(1, Ordering::SeqCst);
         let msg = json!({
             "seq": seq,
@@ -102,9 +164,9 @@ impl TsServer {
             .map_err(|_| CtxError::Symbol("tsserver timeout".into()))?
     }
 
+    /// Fix 1: `open` is a tsserver notification — no response is expected.
     pub async fn open(&self, file: &Path) -> Result<()> {
-        self.request("open", json!({ "file": file })).await?;
-        Ok(())
+        self.notify("open", json!({ "file": file })).await
     }
 
     pub async fn navtree(&self, file: &Path) -> Result<Vec<Symbol>> {
@@ -256,14 +318,8 @@ fn map_tsserver_kind(k: &str) -> Option<ChunkKind> {
     }
 }
 
+/// Fix 3: check project-local tsserver first, fall back to env var override.
 fn resolve_tsserver_path(project_root: &Path) -> Result<PathBuf> {
-    if let Ok(override_path) = std::env::var("CTX_TSSERVER_PATH") {
-        let p = PathBuf::from(override_path);
-        if p.exists() {
-            return Ok(p);
-        }
-        warn!("CTX_TSSERVER_PATH set but does not exist: {}", p.display());
-    }
     let candidates = [
         project_root.join("node_modules/typescript/bin/tsserver"),
         project_root.join("node_modules/.bin/tsserver"),
@@ -272,6 +328,14 @@ fn resolve_tsserver_path(project_root: &Path) -> Result<PathBuf> {
         if c.exists() {
             return Ok(c.clone());
         }
+    }
+    // Fall back to explicit override
+    if let Ok(override_path) = std::env::var("CTX_TSSERVER_PATH") {
+        let p = PathBuf::from(override_path);
+        if p.exists() {
+            return Ok(p);
+        }
+        warn!("CTX_TSSERVER_PATH set but does not exist: {}", p.display());
     }
     Err(CtxError::Symbol(format!(
         "tsserver not found (tried: {}, set CTX_TSSERVER_PATH to override)",
