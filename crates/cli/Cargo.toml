@@ -10,3 +10,6 @@ name = "ctx"
 path = "src/main.rs"
 
 [dependencies]
+
+[lints]
+workspace = true

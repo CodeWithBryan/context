@@ -6,3 +6,5 @@ Cargo.lock.bak
 .DS_Store
 .idea/
 .vscode/
+*.safetensors
+tokenizer.json

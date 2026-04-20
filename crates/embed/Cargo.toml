@@ -7,3 +7,6 @@ license-file.workspace = true
 
 [dependencies]
 # filled in per crate in later tasks
+
+[lints]
+workspace = true
