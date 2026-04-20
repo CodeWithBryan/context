@@ -2,6 +2,7 @@
 
 use ctx_core::traits::{ChunkStore, Embedder, RefStore};
 use ctx_core::{ChunkRef, ContentHash, CtxError, Result, Scope};
+use ctx_symbol::tsserver::TsServer;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,25 +22,44 @@ pub struct Pipeline<C: ChunkStore, R: RefStore, E: Embedder> {
     chunks: Arc<C>,
     refs: Arc<R>,
     embedder: Arc<E>,
+    tsserver: Option<Arc<TsServer>>,
 }
 
 impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
+    #[must_use]
     pub fn new(chunks: C, refs: R, embedder: E) -> Self {
         Self {
             chunks: Arc::new(chunks),
             refs: Arc::new(refs),
             embedder: Arc::new(embedder),
+            tsserver: None,
         }
     }
 
     /// Construct a pipeline from pre-existing `Arc`s, allowing the same
     /// store/embedder instances to be shared with a `Router` in `serve`.
+    #[must_use]
     pub fn new_shared(chunks: Arc<C>, refs: Arc<R>, embedder: Arc<E>) -> Self {
         Self {
             chunks,
             refs,
             embedder,
+            tsserver: None,
         }
+    }
+
+    /// Attach a tsserver for TS/JS structural symbol extraction. Idempotent.
+    /// Pass `None` to explicitly skip tsserver (e.g. environments without Node).
+    #[must_use]
+    pub fn with_tsserver(mut self, tsserver: Option<Arc<TsServer>>) -> Self {
+        self.tsserver = tsserver;
+        self
+    }
+
+    /// Return a clone of the inner `TsServer` Arc, if one is attached.
+    #[must_use]
+    pub fn tsserver_ref(&self) -> Option<Arc<TsServer>> {
+        self.tsserver.clone()
     }
 
     #[must_use]
@@ -211,8 +231,31 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             .collect();
         self.refs.bind(scope, &refs).await?;
 
-        // Extract non-TS/JS symbols (TS/JS returns Ok(vec![]) from extractor).
-        let symbols = ctx_symbol::extractor::extract_from_file(&file_str, &bytes)?;
+        // Extract symbols: tree-sitter for CSS/HTML; tsserver navtree for TS/JS.
+        let mut symbols = ctx_symbol::extractor::extract_from_file(&file_str, &bytes)?;
+
+        let lang = ctx_parse::detect(path);
+        let is_ts_or_js = matches!(
+            lang,
+            Some(
+                ctx_core::Language::TypeScript
+                    | ctx_core::Language::Tsx
+                    | ctx_core::Language::JavaScript
+                    | ctx_core::Language::Jsx
+            )
+        );
+        if is_ts_or_js {
+            if let Some(server) = &self.tsserver {
+                match server.navtree(path).await {
+                    Ok(mut ts_symbols) => symbols.append(&mut ts_symbols),
+                    Err(e) => {
+                        tracing::warn!("tsserver navtree failed for {}: {e}", path.display());
+                        // Do NOT fail the file — tsserver errors are recoverable.
+                    }
+                }
+            }
+        }
+
         if !symbols.is_empty() {
             let count = u64::try_from(symbols.len()).unwrap_or(u64::MAX);
             self.refs.upsert_symbols(scope, &symbols).await?;

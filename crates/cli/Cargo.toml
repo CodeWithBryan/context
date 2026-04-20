@@ -15,6 +15,7 @@ ctx-parse = { path = "../parse" }
 ctx-embed = { path = "../embed" }
 ctx-store = { path = "../store" }
 ctx-index = { path = "../index" }
+ctx-symbol = { path = "../symbol" }
 ctx-watch = { path = "../watch" }
 ctx-query = { path = "../query" }
 ctx-mcp = { path = "../mcp" }

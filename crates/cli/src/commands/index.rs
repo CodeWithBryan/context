@@ -5,6 +5,7 @@ use ctx_embed::FastembedEmbedder;
 use ctx_index::Pipeline;
 use ctx_store::{LanceChunkStore, RedbRefStore};
 use std::path::Path;
+use std::sync::Arc;
 
 pub async fn run(path: &Path) -> Result<()> {
     let abs = crate::config::canonicalize_repo(path)?;
@@ -19,7 +20,8 @@ pub async fn run(path: &Path) -> Result<()> {
         .context("open chunk store")?;
     let refs = RedbRefStore::open(crate::config::refs_file(&abs)?)?;
 
-    let pipeline = Pipeline::new(chunks, refs, embedder);
+    let tsserver = ctx_symbol::tsserver::TsServer::try_spawn(&abs).await?;
+    let pipeline = Pipeline::new(chunks, refs, embedder).with_tsserver(tsserver.map(Arc::new));
     let scope = Scope::local(&abs, &abs, current_branch(&abs).ok()).context("construct scope")?;
 
     let report = pipeline.full_index(&scope, &abs).await?;

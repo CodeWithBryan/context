@@ -194,6 +194,43 @@ async fn hotwash_e2e_full_flow() {
     eprintln!("repo_status text: {status_text}");
     eprintln!("repo_status: OK");
 
+    // ── tsserver wiring: find_definition returns hits for a TS symbol ────────
+    // Verify tsserver-backed symbol extraction produced results. We iterate a
+    // set of candidate names that are likely to exist as top-level exports in
+    // hotwash's TS/TSX files and assert at least one returns a "line" field,
+    // proving the RefStore was populated by the tsserver navtree path.
+    eprintln!("\n--- find_definition (tsserver wiring check) ---");
+    let candidate_names = ["App", "Button", "Home", "Header", "Footer", "Index"];
+    let mut any_hit = false;
+    for name in candidate_names {
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            client.call_tool(
+                rmcp::model::CallToolRequestParams::new("find_definition").with_arguments(
+                    json!({ "name": name })
+                        .as_object()
+                        .expect("json object")
+                        .clone(),
+                ),
+            ),
+        )
+        .await
+        .expect("find_definition timed out")
+        .expect("find_definition tool call failed");
+        let content = format!("{:?}", result.content);
+        if content.contains("\"line\"") {
+            eprintln!("find_definition({name}) returned hits: {content}");
+            any_hit = true;
+            break;
+        }
+        eprintln!("find_definition({name}): no hits");
+    }
+    assert!(
+        any_hit,
+        "no tsserver-backed find_definition hits across candidate names {candidate_names:?}"
+    );
+    eprintln!("tsserver wiring: OK");
+
     // ── Clean shutdown ───────────────────────────────────────────────────────
     eprintln!("\n=== Shutdown ===");
     client.cancel().await.ok();
