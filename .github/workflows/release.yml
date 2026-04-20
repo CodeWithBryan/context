@@ -1,0 +1,253 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Build one binary per target on its native runner.
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            strip_cmd: strip -x
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            strip_cmd: strip -x
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            strip_cmd: strip
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --bin ctx --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: ${{ matrix.strip_cmd }} target/${{ matrix.target }}/release/ctx
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            PKG_VERSION=$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='ctx-cli'))")
+            echo "version=v${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tarball
+        id: tarball
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE_NAME="ctx-${VERSION}-${TARGET}.tar.gz"
+          mkdir -p staging
+          cp target/${TARGET}/release/ctx staging/
+          cp README.md LICENSE staging/
+          tar -czf "${ARCHIVE_NAME}" -C staging .
+          echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctx-${{ matrix.target }}
+          path: ${{ steps.tarball.outputs.archive }}
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Sign + notarize macOS binaries.
+  # Runs after both macOS build jobs.
+  # ─────────────────────────────────────────────────────────────────────────────
+  macos-sign:
+    name: Sign + Notarize (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+
+    runs-on: macos-14
+
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ctx-${{ matrix.target }}
+
+      - name: Import Developer ID certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          ARCHIVE=$(ls ctx-*.tar.gz | head -1)
+          # Extract version from filename: ctx-<version>-<target>.tar.gz
+          # Strip prefix/suffix to isolate the version segment
+          WITHOUT_PREFIX="${ARCHIVE#ctx-}"
+          WITHOUT_SUFFIX="${WITHOUT_PREFIX%-${{ matrix.target }}.tar.gz}"
+          echo "version=${WITHOUT_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Unpack, sign, notarize, staple, repack
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="${{ steps.version.outputs.archive }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+
+          # Unpack
+          mkdir -p sign_work
+          tar -xzf "${ARCHIVE}" -C sign_work
+
+          # Sign the main binary (hardened runtime required for notarization)
+          codesign \
+            --force \
+            --sign "Developer ID Application" \
+            --timestamp \
+            --options runtime \
+            sign_work/ctx
+
+          # Sign any ONNX Runtime dylibs that may be bundled alongside the binary.
+          # (Currently none are present, but this future-proofs the step.)
+          for dylib in sign_work/libonnxruntime*.dylib; do
+            [ -f "$dylib" ] || continue
+            codesign \
+              --force \
+              --sign "Developer ID Application" \
+              --timestamp \
+              --options runtime \
+              "$dylib"
+          done
+
+          # Notarization requires a ZIP
+          ZIP_NAME="ctx-${VERSION}-${TARGET}.zip"
+          ditto -c -k --keepParent sign_work/ctx "${ZIP_NAME}"
+
+          # Submit for notarization and wait (up to 15 min)
+          xcrun notarytool submit "${ZIP_NAME}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait \
+            --timeout 900
+
+          # Staple notarization ticket to the binary
+          xcrun stapler staple sign_work/ctx
+
+          # Verify Gatekeeper acceptance
+          spctl -a -vv -t execute sign_work/ctx
+
+          # Repack into tarball (end users prefer .tar.gz)
+          SIGNED_ARCHIVE="ctx-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "${SIGNED_ARCHIVE}" -C sign_work .
+          echo "SIGNED_ARCHIVE=${SIGNED_ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctx-${{ matrix.target }}-signed
+          path: ${{ env.SIGNED_ARCHIVE }}
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Publish the GitHub Release with all signed/verified tarballs.
+  # ─────────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish Release
+    needs:
+      - build        # for the Linux artifact
+      - macos-sign   # for the signed macOS artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ctx-x86_64-unknown-linux-gnu
+          path: dist/
+
+      - name: Download signed macOS (ARM64) artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ctx-aarch64-apple-darwin-signed
+          path: dist/
+
+      - name: Download signed macOS (Intel) artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ctx-x86_64-apple-darwin-signed
+          path: dist/
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: sha256sum ctx-*.tar.gz > SHA256SUMS
+
+      - name: Determine release tag and draft flag
+        id: release_meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch: derive version from any tarball in dist/
+            # Tarballs are named ctx-<version>-<target>.tar.gz.
+            # Target triples always have the form a-b-c (3 dash-joined parts).
+            ARCHIVE=$(ls dist/ctx-*.tar.gz | head -1)
+            BASENAME=$(basename "${ARCHIVE}" .tar.gz)         # ctx-<version>-<a>-<b>-<c>
+            NOPREFIX="${BASENAME#ctx-}"                        # <version>-<a>-<b>-<c>
+            # Strip the last three dash-separated fields (the triple) to recover <version>
+            VERSION=$(echo "${NOPREFIX}" | rev | cut -d'-' -f4- | rev)
+            echo "tag=${VERSION}-rc-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          draft: ${{ steps.release_meta.outputs.draft }}
+          generate_release_notes: true
+          files: |
+            dist/ctx-*.tar.gz
+            dist/SHA256SUMS
