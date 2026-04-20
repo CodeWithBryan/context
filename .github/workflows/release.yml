@@ -154,10 +154,22 @@ jobs:
           set -euo pipefail
           umask 077
           echo "$P8_B64" | base64 -d > /tmp/AuthKey.p8
-          # rcodesign's UnifiedApiKey JSON expects `private_key` to be the
-          # base64-encoded DER of the ECDSA key, NOT the raw PEM text.
-          # Convert PEM → DER → base64.
-          PK_DER_B64=$(openssl pkey -in /tmp/AuthKey.p8 -outform DER 2>/dev/null | base64 -w 0)
+          # Sanity-check the decoded PEM shape (Apple .p8 is PKCS#8 PRIVATE KEY).
+          if ! head -1 /tmp/AuthKey.p8 | grep -q "BEGIN PRIVATE KEY"; then
+            echo "decoded .p8 does not start with '-----BEGIN PRIVATE KEY-----'" >&2
+            head -3 /tmp/AuthKey.p8 >&2
+            exit 1
+          fi
+          # rcodesign's UnifiedApiKey private_key = base64(DER). Extract the
+          # base64 body between PEM markers directly — this IS the base64(DER)
+          # already, no openssl reformatting needed.
+          PK_DER_B64=$(sed -n '/-----BEGIN/,/-----END/p' /tmp/AuthKey.p8 \
+            | grep -v -- '-----' \
+            | tr -d '\n\r ')
+          if [ -z "$PK_DER_B64" ]; then
+            echo "failed to extract base64 body from .p8" >&2
+            exit 1
+          fi
           jq -n \
             --arg key_id "$KEY_ID" \
             --arg issuer_id "$ISSUER_ID" \
