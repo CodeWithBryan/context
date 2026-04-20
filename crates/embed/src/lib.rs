@@ -1,1 +1,5 @@
-//! ctx-embed — local embedding via fastembed-rs (nomic-embed-code ONNX). Implemented in Task 4.
+//! ctx-embed — local embedder for code + natural-language queries. Implemented in Task 4.
+
+mod fastembed;
+
+pub use fastembed::FastembedEmbedder;

@@ -8,3 +8,4 @@ Cargo.lock.bak
 .vscode/
 *.safetensors
 tokenizer.json
+.fastembed_cache/

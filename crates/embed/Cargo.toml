@@ -6,7 +6,11 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+ctx-core = { path = "../core" }
+fastembed.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
 
 [lints]
 workspace = true
