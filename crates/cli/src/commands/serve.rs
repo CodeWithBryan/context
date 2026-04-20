@@ -28,12 +28,21 @@ pub async fn run(path: &Path) -> Result<()> {
     let refs = Arc::new(refs);
     let embedder = Arc::new(embedder);
 
-    let ts_lsp = ctx_symbol::lsp::launchers::tsgo::try_spawn(&abs).await?;
     // Pipeline for the watcher side — shares the same Arc'd stores as the Router.
-    let pipeline = Arc::new(
-        Pipeline::new_shared(chunks.clone(), refs.clone(), embedder.clone())
-            .with_ts_lsp(ts_lsp.map(Arc::new)),
-    );
+    //
+    // Phase 1 note: we intentionally DO NOT spawn tsgo LSP inside `serve`. LSP
+    // init on large TS monorepos can take 10-30+ seconds, which blocks the
+    // MCP `initialize` handshake and makes Claude Code mark the server as
+    // failed. MCP queries read from already-indexed state (populated by
+    // `ctx index`), so skipping LSP here only affects live re-indexing of
+    // newly edited TS files — users can rerun `ctx index .` to refresh
+    // TS symbols. Semantic search + CSS/HTML symbols still live-update
+    // through the watcher via tree-sitter.
+    let pipeline = Arc::new(Pipeline::new_shared(
+        chunks.clone(),
+        refs.clone(),
+        embedder.clone(),
+    ));
     let scope = Scope::local(&abs, &abs, super::index::current_branch(&abs).ok())?;
 
     // Spawn the watcher loop in the background.
@@ -61,10 +70,5 @@ pub async fn run(path: &Path) -> Result<()> {
     let router = Router::new(chunks, refs, embedder);
     let server: ProductionCtxMcpServer = CtxMcpServer::new(Arc::new(router), scope);
     server.serve_stdio().await?;
-
-    // Best-effort LSP cleanup after the MCP client disconnects.
-    if let Some(ts) = pipeline.ts_lsp_ref() {
-        let _ = ts.shutdown().await;
-    }
     Ok(())
 }

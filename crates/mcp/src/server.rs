@@ -139,16 +139,60 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
 #[tool_router]
 impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxMcpServer<C, R, E> {
     /// Semantic search: find the k most relevant code chunks for a query.
-    #[tool(description = "Semantic search over indexed code chunks for the current repo.")]
+    ///
+    /// Returns a compact summary (file, lines, name, kind, score, preview, hash)
+    /// per hit. Full chunk text is elided to stay within MCP token budgets; use
+    /// `get_chunk` with the hash to retrieve the full text when needed.
+    #[tool(
+        description = "Semantic search over indexed code chunks for the current repo. Returns compact hits; use get_chunk(hash) for full text."
+    )]
     #[instrument(skip(self), fields(query = %args.query, k = args.k))]
     async fn semantic_search(&self, Parameters(args): Parameters<SemanticSearchArgs>) -> String {
+        // Preview length trades token spend vs. snippet usefulness. 400 chars
+        // is enough for Claude to see surrounding context without exploding
+        // the response when k is large.
+        const PREVIEW_LEN: usize = 400;
+
         match self
             .router
             .semantic_search(&self.scope, &args.query, args.k as usize)
             .await
         {
-            Ok(hits) => serde_json::to_string(&hits)
-                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
+            Ok(hits) => {
+                let compact: Vec<serde_json::Value> = hits
+                    .into_iter()
+                    .map(|h| {
+                        let c = &h.chunk;
+                        let text = c.text.as_str();
+                        let (preview, truncated) = if text.len() > PREVIEW_LEN {
+                            // Walk backward to a char boundary; .chars().take(N) would
+                            // count chars, which is fine but slightly slower. Slice by
+                            // byte with a boundary check is cheap.
+                            let mut end = PREVIEW_LEN;
+                            while end > 0 && !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            (&text[..end], true)
+                        } else {
+                            (text, false)
+                        };
+                        serde_json::json!({
+                            "score": h.score,
+                            "file": c.file,
+                            "line_start": c.line_range.start,
+                            "line_end": c.line_range.end,
+                            "kind": format!("{:?}", c.kind),
+                            "lang": format!("{:?}", c.lang),
+                            "name": c.name,
+                            "hash": c.hash.to_hex(),
+                            "preview": preview,
+                            "truncated": truncated,
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&compact)
+                    .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
+            }
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
