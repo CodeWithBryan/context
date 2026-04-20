@@ -1,3 +1,4 @@
+use ctx_core::scope::{RepoId, WorktreeId};
 use ctx_core::traits::{RefStore, SymbolQuery};
 use ctx_core::types::LineRange;
 use ctx_core::{ChunkKind, ChunkRef, ContentHash, CtxError, Scope, Symbol};
@@ -101,4 +102,35 @@ async fn active_hashes_scoped_per_scope() {
     assert!(!a.contains(&ContentHash([20; 32])));
     assert!(b.contains(&ContentHash([20; 32])));
     assert!(!b.contains(&ContentHash([10; 32])));
+}
+
+#[tokio::test]
+async fn scope_key_rejects_reserved_branch_literal_none() {
+    let dir = tempdir().unwrap();
+    let store = RedbRefStore::open(dir.path().join("refs.redb")).unwrap();
+    let root = PathBuf::from("/tmp/repo-collision");
+    // Build a scope whose branch is literally "_none" (which we reserve as the
+    // scope-key None sentinel). `bind` must reject it rather than silently
+    // colliding with a real None-branch scope.
+    let bad_scope = Scope::local(&root, &root, Some("_none".into())).unwrap();
+    let err = store.bind(&bad_scope, &[]).await.expect_err("reserved branch");
+    assert!(matches!(err, ctx_core::CtxError::Store(_)),
+        "expected CtxError::Store, got: {err:?}");
+}
+
+#[tokio::test]
+async fn scope_key_rejects_tenant_with_colon() {
+    let dir = tempdir().unwrap();
+    let store = RedbRefStore::open(dir.path().join("refs.redb")).unwrap();
+    let _root = PathBuf::from("/tmp/repo-tenant");
+    // Construct a Scope with a tenant containing ':' directly (bypassing `local`).
+    let bad_scope = Scope {
+        tenant: "evil:tenant".into(),
+        repo: RepoId(ContentHash::of(b"repo")),
+        worktree: WorktreeId(ContentHash::of(b"wt")),
+        branch: None,
+    };
+    let err = store.bind(&bad_scope, &[]).await.expect_err("reserved tenant");
+    assert!(matches!(err, ctx_core::CtxError::Store(_)),
+        "expected CtxError::Store, got: {err:?}");
 }

@@ -44,26 +44,40 @@ pub struct RedbRefStore {
 }
 
 impl RedbRefStore {
+    /// Open or create a redb database at `path`.
+    ///
+    /// # Errors
+    /// Returns `CtxError::Store` if the database file cannot be created or is corrupt.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let db = Database::create(path).map_err(store_err)?;
         Ok(Self { db: Arc::new(db) })
     }
 
-    fn scope_key(scope: &Scope) -> String {
-        format!(
+    fn scope_key(scope: &Scope) -> Result<String> {
+        if scope.tenant.contains(':') {
+            return Err(CtxError::Store(format!(
+                "scope.tenant must not contain ':': {:?}", scope.tenant
+            )));
+        }
+        if matches!(scope.branch.as_deref(), Some("_none")) {
+            return Err(CtxError::Store(
+                "branch name '_none' is reserved as the scope-key None sentinel".into()
+            ));
+        }
+        Ok(format!(
             "{}:{}:{}:{}",
             scope.tenant,
             scope.repo.0.to_hex(),
             scope.worktree.0.to_hex(),
             scope.branch.as_deref().unwrap_or("_none"),
-        )
+        ))
     }
 }
 
 #[async_trait]
 impl RefStore for RedbRefStore {
     async fn bind(&self, scope: &Scope, refs: &[ChunkRef]) -> Result<()> {
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         let refs = refs.to_vec();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -85,7 +99,7 @@ impl RefStore for RedbRefStore {
     }
 
     async fn active_hashes(&self, scope: &Scope) -> Result<HashSet<ContentHash>> {
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<HashSet<ContentHash>> {
             let read = db.begin_read().map_err(store_err)?;
@@ -96,6 +110,11 @@ impl RefStore for RedbRefStore {
                 Err(e) => return Err(store_err(e)),
             };
             let mut out = HashSet::new();
+            // Safety: redb encodes tuple keys with per-element length prefixes, so
+            // (scope_a, [0xff; 32]) < (scope_a_longer, [0x00; 32]). The fixed-width
+            // 32-byte hash means these sentinel bounds are exhaustive within exactly
+            // this scope_key — they cannot spill into neighboring scopes. If the
+            // ACTIVE key type is ever flattened to raw &[u8], this invariant breaks.
             // Hold the sentinel arrays in named locals so their references live long enough.
             let low = [0x00u8; 32];
             let high = [0xffu8; 32];
@@ -113,7 +132,7 @@ impl RefStore for RedbRefStore {
     }
 
     async fn upsert_symbols(&self, scope: &Scope, symbols: &[Symbol]) -> Result<()> {
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         let syms = symbols.to_vec();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -121,6 +140,7 @@ impl RefStore for RedbRefStore {
             let write = db.begin_write().map_err(store_err)?;
             {
                 let mut table = write.open_table(SYMBOLS_BY_NAME).map_err(store_err)?;
+                // Group by name (accumulate, not dedup — Phase 1 intentionally keeps duplicates).
                 let mut grouped: HashMap<String, Vec<Symbol>> = HashMap::new();
                 for s in syms {
                     grouped.entry(s.name.clone()).or_default().push(s);
@@ -161,7 +181,7 @@ impl RefStore for RedbRefStore {
                 return Err(CtxError::Unimplemented("ByFile".into()));
             }
         };
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || -> Result<Vec<Symbol>> {
             let read = db.begin_read().map_err(store_err)?;
@@ -183,7 +203,7 @@ impl RefStore for RedbRefStore {
     }
 
     async fn record_file_hash(&self, scope: &Scope, file: &str, hash: ContentHash) -> Result<()> {
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         let file = file.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -202,7 +222,7 @@ impl RefStore for RedbRefStore {
     }
 
     async fn file_hash(&self, scope: &Scope, file: &str) -> Result<Option<ContentHash>> {
-        let key = Self::scope_key(scope);
+        let key = Self::scope_key(scope)?;
         let db = self.db.clone();
         let file = file.to_string();
         tokio::task::spawn_blocking(move || -> Result<Option<ContentHash>> {
