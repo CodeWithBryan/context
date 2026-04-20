@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub async fn run(path: &Path) -> Result<()> {
     let abs = crate::config::canonicalize_repo(path)?;
+    crate::config::ensure_per_repo_dirs(&abs)?;
     let embedder = FastembedEmbedder::new_with_options(EmbedderOptions {
         show_download_progress: false,
         ..Default::default()
