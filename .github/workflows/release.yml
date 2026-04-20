@@ -131,13 +131,14 @@ jobs:
           set -euo pipefail
           umask 077
           echo "$P8_B64" | base64 -d > /tmp/AuthKey.p8
-          # Build the rcodesign api-key JSON bundle — the action wraps
-          # `rcodesign notary-submit --api-key-file <json>`, which expects
-          # a single JSON file containing key_id + issuer_id + PEM private key.
+          # rcodesign's UnifiedApiKey JSON expects `private_key` to be the
+          # base64-encoded DER of the ECDSA key, NOT the raw PEM text.
+          # Convert PEM → DER → base64.
+          PK_DER_B64=$(openssl pkey -in /tmp/AuthKey.p8 -outform DER 2>/dev/null | base64 -w 0)
           jq -n \
             --arg key_id "$KEY_ID" \
             --arg issuer_id "$ISSUER_ID" \
-            --rawfile pk /tmp/AuthKey.p8 \
+            --arg pk "$PK_DER_B64" \
             '{key_id: $key_id, issuer_id: $issuer_id, private_key: $pk}' \
             > api-key.json
           chmod 600 api-key.json
