@@ -1,8 +1,13 @@
 use crate::{chunker::Region, languages};
 use ctx_core::{ChunkKind, Language};
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::LazyLock;
 use tree_sitter::{Query, QueryCursor, Tree};
+
+// Note: `ChunkKind::Const` is intentionally NOT emitted by this extractor.
+// Arrow-function consts are captured as `@arrow` and become `ChunkKind::Function`.
+// Non-function consts (e.g. `const MAX_RETRIES = 5`) are skipped for now —
+// they provide low signal for code-focused embeddings. Revisit if symbol
+// search needs them.
 
 const TS_QUERY_SRC: &str = r"
 (function_declaration name: (identifier) @name) @function
@@ -21,27 +26,38 @@ const JS_QUERY_SRC: &str = r"
 (lexical_declaration (variable_declarator name: (identifier) @name value: (arrow_function))) @arrow
 ";
 
-static QUERY_CACHE: std::sync::LazyLock<Mutex<HashMap<Language, Query>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+// One compiled Query per (grammar, query-source) combination.
+// JS and TSX use different grammars so we build four queries total.
+static TS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(&languages::tree_sitter_language(Language::TypeScript), TS_QUERY_SRC)
+        .expect("invalid typescript query")
+});
 
-fn query_for(lang: Language) -> Query {
-    let src = match lang {
-        Language::TypeScript | Language::Tsx | Language::Jsx => TS_QUERY_SRC,
-        Language::JavaScript => JS_QUERY_SRC,
+static TSX_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    // Tsx grammar is also used for Jsx.
+    Query::new(&languages::tree_sitter_language(Language::Tsx), TS_QUERY_SRC)
+        .expect("invalid tsx query")
+});
+
+static JS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+    Query::new(&languages::tree_sitter_language(Language::JavaScript), JS_QUERY_SRC)
+        .expect("invalid javascript query")
+});
+
+fn query_for(lang: Language) -> &'static Query {
+    match lang {
+        Language::TypeScript => &TS_QUERY,
+        Language::Tsx | Language::Jsx => &TSX_QUERY,
+        Language::JavaScript => &JS_QUERY,
         _ => unreachable!("query_for called on non-JS/TS language"),
-    };
-    Query::new(&languages::tree_sitter_language(lang), src)
-        .expect("invalid ts/js tree-sitter query")
+    }
 }
 
+#[must_use]
 pub fn extract(tree: &Tree, src: &[u8], lang: Language) -> Vec<Region> {
-    let mut cache = QUERY_CACHE.lock().expect("query cache poisoned");
-    let query = cache.entry(lang).or_insert_with(|| query_for(lang));
-
+    let query = query_for(lang);
     let mut cursor = QueryCursor::new();
     let mut out = Vec::new();
-
-    // tree-sitter 0.23.2 QueryMatches implements the standard Iterator trait
     for m in cursor.matches(query, tree.root_node(), src) {
         let mut kind: Option<ChunkKind> = None;
         let mut name: Option<String> = None;

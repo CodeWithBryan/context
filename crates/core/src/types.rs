@@ -85,6 +85,9 @@ pub enum ChunkKind {
     Class,
     Interface,
     Type,
+    /// Top-level `const` / `let` / `var` bindings that do NOT hold an arrow function.
+    /// Not currently emitted by `ctx-parse` (Task 3 only chunks function-like consts);
+    /// reserved for later tasks that may want to index value-only constants.
     Const,
     Enum,
     Selector,

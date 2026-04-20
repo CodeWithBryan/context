@@ -10,6 +10,7 @@ static QUERY: std::sync::LazyLock<Query> = std::sync::LazyLock::new(|| {
     Query::new(&tree_sitter_css::LANGUAGE.into(), CSS_QUERY_SRC).expect("invalid css query")
 });
 
+#[must_use]
 pub fn extract(tree: &Tree, src: &[u8]) -> Vec<Region> {
     let mut cursor = QueryCursor::new();
     let mut out = Vec::new();

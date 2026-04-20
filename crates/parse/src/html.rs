@@ -11,6 +11,7 @@ static QUERY: std::sync::LazyLock<Query> = std::sync::LazyLock::new(|| {
     Query::new(&tree_sitter_html::LANGUAGE.into(), HTML_QUERY_SRC).expect("invalid html query")
 });
 
+#[must_use]
 pub fn extract(tree: &Tree, src: &[u8]) -> Vec<Region> {
     let mut cursor = QueryCursor::new();
     let mut out = Vec::new();
