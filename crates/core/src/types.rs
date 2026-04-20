@@ -112,7 +112,7 @@ pub struct ChunkRef {
     pub line_range: LineRange,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Hit {
     pub chunk: Chunk,
     pub score: f32,

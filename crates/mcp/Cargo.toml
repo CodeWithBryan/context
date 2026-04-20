@@ -6,7 +6,27 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+ctx-core = { path = "../core" }
+ctx-query = { path = "../query" }
+ctx-store = { path = "../store" }
+ctx-embed = { path = "../embed" }
+# "macros" adds #[tool] / #[tool_router] / #[tool_handler] proc-macros.
+# "transport-io" adds rmcp::transport::stdio() (tokio stdin/stdout pair).
+# "client" is needed for the in-process duplex transport used in tests.
+rmcp = { workspace = true, features = ["server", "transport-io", "macros", "client"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# schemars 1.x — must match the version rmcp 1.5.0 re-exports (resolves to 1.2.1).
+schemars = "1"
+async-trait.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
+tempfile = "3"
+async-trait.workspace = true
 
 [lints]
 workspace = true
