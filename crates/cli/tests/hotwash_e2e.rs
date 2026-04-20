@@ -276,14 +276,26 @@ async fn hotwash_e2e_full_flow() {
     .await
     .expect("find_definition timed out")
     .expect("find_definition tool call failed");
-    let content = format!("{:?}", result.content);
+    // Extract the raw JSON text from the tool result (avoid Debug-formatting which
+    // double-escapes quotes and breaks substring matching).
+    let text = result
+        .content
+        .iter()
+        .filter_map(|c| {
+            if let rmcp::model::RawContent::Text(t) = c.raw.clone() {
+                Some(t.text)
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    eprintln!("find_definition({target}) response: {text}");
     assert!(
-        content.contains("\"line\""),
+        text.contains("\"line\""),
         "LSP-backed find_definition({target}) returned no hits — \
-         tsgo symbol extraction may not be wired correctly: {content}"
+         tsgo symbol extraction may not be wired correctly: {text}"
     );
-    eprintln!("find_definition({target}) returned hits: {content}");
-    eprintln!("LSP (tsgo) wiring: OK");
+    eprintln!("LSP (tsgo) wiring: OK — find_definition({target}) returned ≥1 hit");
 
     // ── Clean shutdown ───────────────────────────────────────────────────────
     eprintln!("\n=== Shutdown ===");
