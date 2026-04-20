@@ -6,7 +6,18 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+ctx-core = { path = "../core" }
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ctx-store = { path = "../store" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+async-trait.workspace = true
 
 [lints]
 workspace = true

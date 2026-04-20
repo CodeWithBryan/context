@@ -1060,6 +1060,16 @@ dependencies = [
 [[package]]
 name = "ctx-query"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ctx-core",
+ "ctx-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ctx-store"
