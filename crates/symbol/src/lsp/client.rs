@@ -5,6 +5,7 @@ use lsp_types::{
     TextDocumentSyncClientCapabilities,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::str::FromStr as _;
@@ -12,23 +13,32 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tokio::time::{timeout, Duration};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 // Re-export url::Url so callers can build file:// URIs via `Url::from_file_path`.
 pub use url::Url;
 
+/// Pending requests: maps request id → oneshot sender for the response value.
+type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Value>>>>;
+
 /// Generic LSP client that communicates over a child process's stdin/stdout
 /// using JSON-RPC 2.0 messages framed with `Content-Length:` headers.
+///
+/// Uses an async dispatcher model: a background reader task classifies every
+/// incoming message and either fulfills a pending request via a oneshot channel
+/// or auto-replies to server-initiated requests.  This eliminates the
+/// write→read lock-step pattern that caused deadlocks when the server sent
+/// `client/registerCapability`, `window/workDoneProgress/create`, or
+/// `workspace/configuration` requests before answering ours.
 pub struct LspClient {
     child: Mutex<Child>,
     stdin: Arc<Mutex<ChildStdin>>,
-    stdout: Arc<Mutex<BufReader<ChildStdout>>>,
     request_id: AtomicI64,
-    /// Serializes entire write→read cycles so concurrent callers don't
-    /// interleave responses.
-    request_lock: Mutex<()>,
+    pending: Pending,
+    /// Kept alive so the reader task lives as long as the client does.
+    _reader: tokio::task::JoinHandle<()>,
     server_name: String,
 }
 
@@ -51,11 +61,12 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| CtxError::Symbol(format!("{server_name}: no stdout")))?;
-        // Forward server stderr to tracing::debug
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| CtxError::Symbol(format!("{server_name}: no stderr")))?;
+
+        // Forward server stderr to tracing::debug
         let sname = server_name.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
@@ -68,12 +79,30 @@ impl LspClient {
                 line.clear();
             }
         });
+
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let stdin_arc = Arc::new(Mutex::new(stdin));
+
+        // Spawn the reader / dispatcher task.
+        let reader_pending = Arc::clone(&pending);
+        let reader_stdin = Arc::clone(&stdin_arc);
+        let reader_server_name = server_name.clone();
+        let reader_handle = tokio::spawn(async move {
+            reader_task(
+                BufReader::new(stdout),
+                reader_stdin,
+                reader_pending,
+                reader_server_name,
+            )
+            .await;
+        });
+
         Ok(Self {
             child: Mutex::new(child),
-            stdin: Arc::new(Mutex::new(stdin)),
-            stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
+            stdin: stdin_arc,
             request_id: AtomicI64::new(1),
-            request_lock: Mutex::new(()),
+            pending,
+            _reader: reader_handle,
             server_name,
         })
     }
@@ -194,10 +223,8 @@ impl LspClient {
     // ── Low-level helpers ────────────────────────────────────────────────────
 
     async fn request(&self, method: &str, params: Value) -> Result<Value> {
-        // Acquire the gate for the full write→read cycle
-        let _gate = self.request_lock.lock().await;
-
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
+
         let msg = if params.is_null() {
             json!({
                 "jsonrpc": "2.0",
@@ -212,43 +239,41 @@ impl LspClient {
                 "params": params
             })
         };
-        self.write_message(&msg).await?;
 
-        // Read responses until we find one matching our request id
+        // Register the oneshot *before* sending to avoid a race where the
+        // reader task delivers the response before we've registered.
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+
+        trace!("{} → request id={id} method={method}", self.server_name);
+        if let Err(e) = self.write_message(&msg).await {
+            // Clean up the pending entry if send failed.
+            self.pending.lock().await.remove(&id);
+            return Err(e);
+        }
+
         let server_name = self.server_name.clone();
-        let fut = async {
-            loop {
-                let val = self.read_message().await?;
-                // Check if it's a response (has "id") vs notification
-                let msg_id = val.get("id").and_then(Value::as_i64);
-                if let Some(resp_id) = msg_id {
-                    if resp_id == id {
-                        // Check for LSP error
-                        if let Some(err) = val.get("error") {
-                            return Err(CtxError::Symbol(format!(
-                                "{server_name} LSP error for {method}: {err}"
-                            )));
-                        }
-                        let result = val.get("result").cloned().unwrap_or(Value::Null);
-                        return Ok(result);
-                    }
-                    debug!("{server_name}: skipping response id={resp_id} (waiting for {id})");
+        timeout(Duration::from_secs(30), rx)
+            .await
+            .map_err(|_| {
+                CtxError::Symbol(format!(
+                    "{server_name} timeout waiting for response to {method}"
+                ))
+            })?
+            .map_err(|_| {
+                CtxError::Symbol(format!(
+                    "{server_name} reader task dropped while waiting for {method}"
+                ))
+            })
+            .and_then(|val| {
+                if let Some(err) = val.get("error") {
+                    Err(CtxError::Symbol(format!(
+                        "{server_name} LSP error for {method}: {err}"
+                    )))
                 } else {
-                    // It's a notification — discard
-                    debug!(
-                        "{server_name}: notification: {}",
-                        val.get("method").and_then(|v| v.as_str()).unwrap_or("?")
-                    );
+                    Ok(val.get("result").cloned().unwrap_or(Value::Null))
                 }
-            }
-        };
-
-        timeout(Duration::from_secs(15), fut).await.map_err(|_| {
-            CtxError::Symbol(format!(
-                "{} timeout waiting for response to {method}",
-                self.server_name
-            ))
-        })?
+            })
     }
 
     async fn notify(&self, method: &str, params: Value) -> Result<()> {
@@ -264,6 +289,7 @@ impl LspClient {
                 "params": params
             })
         };
+        trace!("{} → notify method={method}", self.server_name);
         self.write_message(&msg).await
     }
 
@@ -285,50 +311,166 @@ impl LspClient {
             .map_err(|e| CtxError::Symbol(format!("{} stdin flush: {e}", self.server_name)))?;
         Ok(())
     }
+}
 
-    async fn read_message(&self) -> Result<Value> {
-        let mut stdout = self.stdout.lock().await;
-        // Read headers until blank line; extract Content-Length
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            let n = stdout.read_line(&mut line).await.map_err(|e| {
-                CtxError::Symbol(format!("{} stdout read header: {e}", self.server_name))
-            })?;
-            if n == 0 {
-                return Err(CtxError::Symbol(format!(
-                    "{} server closed",
-                    self.server_name
-                )));
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                // End of headers
+// ── Reader / dispatcher task ──────────────────────────────────────────────────
+
+/// Reads framed JSON-RPC messages from the server's stdout and dispatches them:
+///
+/// - **Response** (has `"id"`, no `"method"`): fulfils the matching pending
+///   oneshot.
+/// - **Server-initiated request** (has `"id"` AND `"method"`): auto-replies
+///   so the server is never left waiting.
+/// - **Notification** (has `"method"`, no `"id"`): logged and discarded.
+async fn reader_task(
+    mut stdout: BufReader<ChildStdout>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    pending: Pending,
+    server_name: String,
+) {
+    loop {
+        let val = match read_framed_message(&mut stdout, &server_name).await {
+            Ok(v) => v,
+            Err(e) => {
+                debug!("{server_name} reader exiting: {e}");
                 break;
             }
-            if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-                let len: usize = rest.trim().parse().map_err(|_| {
-                    CtxError::Symbol(format!(
-                        "{} invalid Content-Length: {rest}",
-                        self.server_name
-                    ))
-                })?;
-                content_length = Some(len);
+        };
+
+        let has_method = val.get("method").is_some();
+        let has_id = val.get("id").is_some();
+
+        if has_method && has_id {
+            // Server-initiated request — must reply or the server deadlocks.
+            let method = val
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_owned();
+            let req_id = val.get("id").cloned().unwrap_or(Value::Null);
+            trace!("{server_name} ← server request id={req_id} method={method}");
+            auto_reply(&stdin, &server_name, req_id, &method, &val).await;
+        } else if has_method {
+            // Notification — log and move on.
+            let method = val.get("method").and_then(Value::as_str).unwrap_or("?");
+            debug!("{server_name} ← notification method={method}");
+        } else if let Some(id) = val.get("id").and_then(Value::as_i64) {
+            // Response to one of our requests.
+            let method_hint = val
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("(response)");
+            trace!("{server_name} ← response id={id} method={method_hint}");
+            if let Some(tx) = pending.lock().await.remove(&id) {
+                let _ = tx.send(val);
+            } else {
+                warn!("{server_name}: received response for unknown id={id}");
             }
-            // Ignore other headers (e.g. Content-Type)
+        } else {
+            debug!("{server_name}: received unclassifiable message: {val}");
         }
-        let len = content_length.ok_or_else(|| {
-            CtxError::Symbol(format!("{} missing Content-Length", self.server_name))
-        })?;
-        let mut body = vec![0u8; len];
-        stdout
-            .read_exact(&mut body)
-            .await
-            .map_err(|e| CtxError::Symbol(format!("{} stdout read body: {e}", self.server_name)))?;
-        let val: Value = serde_json::from_slice(&body)
-            .map_err(|e| CtxError::Symbol(format!("{} JSON parse: {e}", self.server_name)))?;
-        Ok(val)
     }
+
+    // Reader exited — drop all pending senders so callers unblock with RecvError.
+    pending.lock().await.clear();
+}
+
+/// Send a response to a server-initiated request.
+async fn auto_reply(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    server_name: &str,
+    req_id: Value,
+    method: &str,
+    _req: &Value,
+) {
+    let result = match method {
+        // These are all safe to acknowledge with null / empty results.
+        "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/workDoneProgress/create" => Value::Null,
+
+        // workspace/configuration — reply with an empty array (the server sends
+        // a list of config items it wants; we have none to provide).
+        "workspace/configuration" => json!([]),
+
+        // Unknown server→client request — reply with Method Not Found so the
+        // server knows not to wait forever.
+        _ => {
+            warn!("{server_name}: unknown server request method={method} — replying with error");
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": { "code": -32601, "message": "Method not found" }
+            });
+            write_framed(stdin, server_name, &response).await;
+            return;
+        }
+    };
+
+    let response = json!({
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "result": result
+    });
+    write_framed(stdin, server_name, &response).await;
+}
+
+/// Write a single framed JSON-RPC message to stdin.
+async fn write_framed(stdin: &Arc<Mutex<ChildStdin>>, server_name: &str, msg: &Value) {
+    let Ok(body) = serde_json::to_string(msg) else {
+        warn!("{server_name}: failed to serialize auto-reply");
+        return;
+    };
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    let mut guard = stdin.lock().await;
+    if guard.write_all(header.as_bytes()).await.is_err()
+        || guard.write_all(body.as_bytes()).await.is_err()
+        || guard.flush().await.is_err()
+    {
+        debug!("{server_name}: auto-reply write failed (server may have closed)");
+    }
+}
+
+/// Read a single `Content-Length`-framed JSON-RPC message from any async
+/// buffered reader.  Made generic so the framing logic can be tested with
+/// in-process `tokio::io::duplex` streams without needing a real child process.
+pub(crate) async fn read_framed_message<R>(reader: &mut R, server_name: &str) -> Result<Value>
+where
+    R: AsyncBufReadExt + AsyncReadExt + Unpin,
+{
+    let mut content_length: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        let n = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| CtxError::Symbol(format!("{server_name} stdout read header: {e}")))?;
+        if n == 0 {
+            return Err(CtxError::Symbol(format!("{server_name} server closed")));
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            // End of headers
+            break;
+        }
+        if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
+            let len: usize = rest.trim().parse().map_err(|_| {
+                CtxError::Symbol(format!("{server_name} invalid Content-Length: {rest}"))
+            })?;
+            content_length = Some(len);
+        }
+        // Ignore other headers (e.g. Content-Type)
+    }
+    let len = content_length
+        .ok_or_else(|| CtxError::Symbol(format!("{server_name} missing Content-Length")))?;
+    let mut body = vec![0u8; len];
+    reader
+        .read_exact(&mut body)
+        .await
+        .map_err(|e| CtxError::Symbol(format!("{server_name} stdout read body: {e}")))?;
+    let val: Value = serde_json::from_slice(&body)
+        .map_err(|e| CtxError::Symbol(format!("{server_name} JSON parse: {e}")))?;
+    Ok(val)
 }
 
 // ── Symbol mapping ────────────────────────────────────────────────────────────
