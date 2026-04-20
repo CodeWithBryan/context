@@ -137,7 +137,7 @@ jobs:
           mkdir -p ~/.apple-keys
           echo "$P8_B64" | base64 -d > ~/.apple-keys/AuthKey.p8
           # rcodesign needs a combined JSON bundling the API key + identifiers
-          rcodesign encode-app-store-connect-api-key \
+          rcodesign --no-config encode-app-store-connect-api-key \
             -o ~/.apple-keys/api-key.json \
             "$ISSUER_ID" \
             "$KEY_ID" \
@@ -164,14 +164,14 @@ jobs:
           PW_FILE=$(mktemp)
           printf '%s' "$P12_PW" > "$PW_FILE"
           chmod 600 "$PW_FILE"
-          rcodesign sign \
+          rcodesign --no-config sign \
             --p12-file ~/.apple-keys/DeveloperID.p12 \
             --p12-password-file "$PW_FILE" \
             --code-signature-flags runtime \
             unsigned/ctx
           rm "$PW_FILE"
           # Sanity: rcodesign verifies its own signature
-          rcodesign verify unsigned/ctx
+          rcodesign --no-config verify unsigned/ctx
 
       - name: Zip signed binary for notarization
         shell: bash
@@ -187,7 +187,7 @@ jobs:
           # rcodesign polls Apple's REST API until the submission is Accepted
           # or rejected. On this cheap Linux runner ($0.008/min), even a 60-min
           # wait costs <$0.50 worst case.
-          rcodesign notary-submit \
+          rcodesign --no-config notary-submit \
             --api-key-file ~/.apple-keys/api-key.json \
             --wait \
             ctx-for-notary.zip
