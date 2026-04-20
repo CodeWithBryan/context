@@ -6,7 +6,16 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+anyhow.workspace = true
+ctx-core = { path = "../core" }
+notify.workspace = true
+notify-debouncer-full.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
