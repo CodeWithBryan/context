@@ -7,10 +7,10 @@
  * time, input/output tokens, and total cost.
  *
  * Usage:
- *   bun run scripts/bench-ctx.ts <repo-dir> [--questions path.txt]
+ *   bun run scripts/bench-ctx.ts <repo-dir> [--questions path.txt] [--concurrency N]
  *
  * Example:
- *   bun run scripts/bench-ctx.ts ~/Development/hotwash/hotwash
+ *   bun run scripts/bench-ctx.ts ~/Development/hotwash/hotwash --concurrency 4
  *
  * Requires:
  *   - `claude` CLI (Claude Code) in PATH
@@ -51,6 +51,7 @@ if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
 
 const repoDir = args[0]!;
 let questions = DEFAULT_QUESTIONS;
+let concurrency = 4;
 
 const qFileIdx = args.indexOf("--questions");
 if (qFileIdx >= 0 && args[qFileIdx + 1]) {
@@ -63,6 +64,16 @@ if (qFileIdx >= 0 && args[qFileIdx + 1]) {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
+const cIdx = args.indexOf("--concurrency");
+if (cIdx >= 0 && args[cIdx + 1]) {
+  const n = Number.parseInt(args[cIdx + 1]!, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    console.error(`invalid --concurrency value: ${args[cIdx + 1]}`);
+    process.exit(2);
+  }
+  concurrency = n;
 }
 
 if (!existsSync(repoDir)) {
@@ -244,24 +255,72 @@ interface PairResult {
   withCtx: RunResult;
 }
 
-const results: PairResult[] = [];
+type Label = "baseline" | "with-ctx";
+interface Job {
+  idx: number;
+  label: Label;
+  mcpCfg: string;
+  question: string;
+}
 
+const jobs: Job[] = [];
 for (let i = 0; i < questions.length; i++) {
-  const q = questions[i]!;
-  console.error(`\n[${i + 1}/${questions.length}] ${q}`);
-  console.error("  → baseline...");
-  const baseline = await runOne(baselineCfg, q);
-  console.error(
-    `    ${baseline.ok ? "ok" : "FAIL"}  ${baseline.wallMs}ms  ` +
-      `in=${baseline.inputTokens} out=${baseline.outputTokens} $${baseline.costUsd.toFixed(4)}`,
+  jobs.push({ idx: i, label: "baseline", mcpCfg: baselineCfg, question: questions[i]! });
+  jobs.push({ idx: i, label: "with-ctx", mcpCfg: withCtxCfg, question: questions[i]! });
+}
+
+console.error(
+  `\nrunning ${jobs.length} jobs (${questions.length} questions × 2 legs) at concurrency=${concurrency}\n`,
+);
+
+// Pool: run up to `concurrency` jobs at once. Each slot pulls the next job
+// when it finishes.
+const jobResults = new Array<RunResult | null>(jobs.length).fill(null);
+let nextJob = 0;
+let finished = 0;
+const totalJobs = jobs.length;
+
+async function worker(workerId: number): Promise<void> {
+  while (true) {
+    const jobIdx = nextJob;
+    if (jobIdx >= jobs.length) return;
+    nextJob = jobIdx + 1;
+    const job = jobs[jobIdx]!;
+    const tag = `[${job.idx + 1}${job.label === "baseline" ? "a" : "b"}/${totalJobs}]`;
+    console.error(`${tag} [w${workerId}] start ${job.label}`);
+    const start = performance.now();
+    const res = await runOne(job.mcpCfg, job.question);
+    const dt = Math.round(performance.now() - start);
+    jobResults[jobIdx] = res;
+    finished += 1;
+    console.error(
+      `${tag} [w${workerId}] ${res.ok ? "ok" : "FAIL"}  ${dt}ms  ` +
+        `$${res.costUsd.toFixed(4)}  turns=${res.numTurns}  out=${res.outputTokens}  ` +
+        `(${finished}/${totalJobs} done)`,
+    );
+  }
+}
+
+const workers: Promise<void>[] = [];
+for (let w = 0; w < Math.min(concurrency, totalJobs); w++) {
+  workers.push(worker(w));
+}
+await Promise.all(workers);
+
+// Reassemble results keyed by question index
+const results: PairResult[] = [];
+for (let i = 0; i < questions.length; i++) {
+  const baselineJobIdx = jobs.findIndex(
+    (j) => j.idx === i && j.label === "baseline",
   );
-  console.error("  → with-ctx...");
-  const withCtx = await runOne(withCtxCfg, q);
-  console.error(
-    `    ${withCtx.ok ? "ok" : "FAIL"}  ${withCtx.wallMs}ms  ` +
-      `in=${withCtx.inputTokens} out=${withCtx.outputTokens} $${withCtx.costUsd.toFixed(4)}`,
+  const withCtxJobIdx = jobs.findIndex(
+    (j) => j.idx === i && j.label === "with-ctx",
   );
-  results.push({ question: q, baseline, withCtx });
+  results.push({
+    question: questions[i]!,
+    baseline: jobResults[baselineJobIdx]!,
+    withCtx: jobResults[withCtxJobIdx]!,
+  });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
