@@ -8,15 +8,20 @@ license-file.workspace = true
 [dependencies]
 ctx-core = { path = "../core" }
 redb.workspace = true
+lancedb.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.95"
 authors = ["Bryan Gillespie"]
 repository = "https://github.com/CodeWithBryan/context"
 license-file = "LICENSE"
@@ -28,9 +28,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# blake3 1.8+ pulls constant_time_eq 0.4 which requires rustc 1.95.
-# Cargo.lock is pinned to blake3 1.5.4 to stay within our rust-toolchain = "1.94".
-# Lift this when we bump the toolchain.
+# lancedb 0.27 → datafusion 52 requires blake3 ^1.8 → constant_time_eq 0.4 → rustc 1.95.
+# Toolchain bumped to 1.95 in rust-toolchain.toml to accommodate this.
 blake3 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
