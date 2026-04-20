@@ -2,7 +2,7 @@
 
 use ctx_core::traits::{ChunkStore, Embedder, RefStore};
 use ctx_core::{ChunkRef, ContentHash, CtxError, Result, Scope};
-use ctx_symbol::tsserver::TsServer;
+use ctx_symbol::lsp::LspClient;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub struct Pipeline<C: ChunkStore, R: RefStore, E: Embedder> {
     chunks: Arc<C>,
     refs: Arc<R>,
     embedder: Arc<E>,
-    tsserver: Option<Arc<TsServer>>,
+    ts_lsp: Option<Arc<LspClient>>,
 }
 
 impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
@@ -32,7 +32,7 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             chunks: Arc::new(chunks),
             refs: Arc::new(refs),
             embedder: Arc::new(embedder),
-            tsserver: None,
+            ts_lsp: None,
         }
     }
 
@@ -44,22 +44,22 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             chunks,
             refs,
             embedder,
-            tsserver: None,
+            ts_lsp: None,
         }
     }
 
-    /// Attach a tsserver for TS/JS structural symbol extraction. Idempotent.
-    /// Pass `None` to explicitly skip tsserver (e.g. environments without Node).
+    /// Attach an LSP client for TS/JS structural symbol extraction. Idempotent.
+    /// Pass `None` to explicitly skip LSP (e.g. environments without tsgo).
     #[must_use]
-    pub fn with_tsserver(mut self, tsserver: Option<Arc<TsServer>>) -> Self {
-        self.tsserver = tsserver;
+    pub fn with_ts_lsp(mut self, lsp: Option<Arc<LspClient>>) -> Self {
+        self.ts_lsp = lsp;
         self
     }
 
-    /// Return a clone of the inner `TsServer` Arc, if one is attached.
+    /// Return a clone of the inner `LspClient` Arc, if one is attached.
     #[must_use]
-    pub fn tsserver_ref(&self) -> Option<Arc<TsServer>> {
-        self.tsserver.clone()
+    pub fn ts_lsp_ref(&self) -> Option<Arc<LspClient>> {
+        self.ts_lsp.clone()
     }
 
     #[must_use]
@@ -156,6 +156,7 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
     }
 
     /// Index a single file: read → hash-dedup → chunk → embed-dedup → store → symbol.
+    #[allow(clippy::too_many_lines)]
     async fn index_file(&self, scope: &Scope, path: &Path) -> Result<FileReport> {
         let bytes = tokio::fs::read(path).await?;
         let file_hash = ContentHash::of(&bytes);
@@ -231,11 +232,11 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             .collect();
         self.refs.bind(scope, &refs).await?;
 
-        // Extract symbols: tree-sitter for CSS/HTML; tsserver navtree for TS/JS.
+        // Extract symbols: tree-sitter for CSS/HTML; LSP documentSymbol for TS/JS.
         let mut symbols = ctx_symbol::extractor::extract_from_file(&file_str, &bytes)?;
 
         let lang = ctx_parse::detect(path);
-        let is_ts_or_js = matches!(
+        if matches!(
             lang,
             Some(
                 ctx_core::Language::TypeScript
@@ -243,14 +244,27 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
                     | ctx_core::Language::JavaScript
                     | ctx_core::Language::Jsx
             )
-        );
-        if is_ts_or_js {
-            if let Some(server) = &self.tsserver {
-                match server.navtree(path).await {
+        ) {
+            if let Some(lsp) = &self.ts_lsp {
+                let uri = url::Url::from_file_path(path).map_err(|()| {
+                    CtxError::Symbol(format!("not a valid file URL: {}", path.display()))
+                })?;
+                let language_id = match lang.expect("matched above") {
+                    ctx_core::Language::TypeScript => "typescript",
+                    ctx_core::Language::Tsx => "typescriptreact",
+                    ctx_core::Language::JavaScript => "javascript",
+                    ctx_core::Language::Jsx => "javascriptreact",
+                    _ => unreachable!(),
+                };
+                let text = std::str::from_utf8(&bytes).unwrap_or("");
+                if let Err(e) = lsp.did_open(&uri, language_id, text).await {
+                    tracing::warn!("LSP didOpen {}: {e}", path.display());
+                }
+                match lsp.document_symbols(&uri, &file_str).await {
                     Ok(mut ts_symbols) => symbols.append(&mut ts_symbols),
                     Err(e) => {
-                        tracing::warn!("tsserver navtree failed for {}: {e}", path.display());
-                        // Do NOT fail the file — tsserver errors are recoverable.
+                        tracing::warn!("LSP documentSymbol {}: {e}", path.display());
+                        // Do NOT fail the file — LSP errors are recoverable.
                     }
                 }
             }

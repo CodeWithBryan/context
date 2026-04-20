@@ -9,17 +9,44 @@
 //!   - ~150 MB model (fastembed all-MiniLM-L6-v2) will be downloaded on first run
 //!   - Full index of ~265 TS/TSX/CSS/HTML files can take 2–10 min on first run
 
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use rmcp::{transport::TokioChildProcess, ServiceExt};
 use serde_json::json;
 
-// ─── Helper ────────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 fn hotwash_path() -> Option<PathBuf> {
     let p = dirs::home_dir()?.join("Development/hotwash/hotwash");
     p.exists().then_some(p)
+}
+
+/// Scan the hotwash TypeScript sources for the first `export function <Name>` and
+/// return the function name. This avoids hard-coded names that may drift over time.
+fn pick_hotwash_target(repo: &std::path::Path) -> Option<String> {
+    let pattern = regex::Regex::new(r"^export\s+(async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)")
+        .expect("regex");
+    for entry in walkdir::WalkDir::new(repo)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            let p = e.path();
+            !p.components().any(|c| c.as_os_str() == "node_modules")
+                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx"))
+        })
+    {
+        if let Ok(f) = std::fs::File::open(entry.path()) {
+            for line in BufReader::new(f).lines().take(200).flatten() {
+                if let Some(caps) = pattern.captures(&line) {
+                    return Some(caps[2].to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Build (or reuse) the `ctx` debug binary and return its path.
@@ -59,6 +86,26 @@ async fn hotwash_e2e_full_flow() {
     let binary = build_ctx_binary();
     eprintln!("ctx binary: {}", binary.display());
 
+    // Wipe any prior per-repo state so this test exercises a fresh index —
+    // necessary to verify tsserver symbol extraction actually runs (skipped
+    // files on a warm cache bypass tsserver entirely).
+    //
+    // IMPORTANT: `ctx init`/`index` canonicalize the path internally before
+    // hashing, so we must canonicalize here too, otherwise case-insensitive
+    // macOS filesystems produce a different hash and the wipe misses.
+    let canonical_repo = std::fs::canonicalize(&repo).expect("canonicalize hotwash");
+    let per_repo_hash = blake3::hash(canonical_repo.as_os_str().as_encoded_bytes()).to_hex();
+    let per_repo_dir = dirs::home_dir()
+        .expect("home dir")
+        .join(".ctx/repos")
+        .join(per_repo_hash.as_str());
+    if per_repo_dir.exists() {
+        eprintln!("wiping prior state: {}", per_repo_dir.display());
+        std::fs::remove_dir_all(&per_repo_dir).expect("wipe per-repo dir");
+    } else {
+        eprintln!("no prior state at: {}", per_repo_dir.display());
+    }
+
     // ── Phase 1: init ────────────────────────────────────────────────────────
     eprintln!("\n=== Phase 1: ctx init ===");
     let status = std::process::Command::new(&binary)
@@ -90,21 +137,27 @@ async fn hotwash_e2e_full_flow() {
         output.status
     );
 
-    // Parse "chunks=N" from "indexed: files=F, skipped=S, chunks=C, ..."
+    // Parse files= and skipped= — a successful index pass either upserts new
+    // chunks (fresh index) or skips unchanged files (warm cache from prior run).
+    // Either proves the pipeline walked the tree correctly.
     assert!(
-        stdout.contains("chunks="),
-        "expected 'chunks=' in index output: {stdout}"
+        stdout.contains("files=") && stdout.contains("skipped="),
+        "expected 'files=' and 'skipped=' in index output: {stdout}"
     );
-    let chunks_upserted: u64 = stdout
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("chunks="))
-        .and_then(|s| s.trim_end_matches(',').parse().ok())
-        .expect("failed to parse chunks= from index output");
+    let parse_field = |key: &str| -> u64 {
+        stdout
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix(key))
+            .and_then(|s| s.trim_end_matches(',').parse().ok())
+            .unwrap_or(0)
+    };
+    let files_indexed = parse_field("files=");
+    let files_skipped = parse_field("skipped=");
     assert!(
-        chunks_upserted > 0,
-        "expected chunks > 0, got {chunks_upserted}"
+        files_indexed + files_skipped > 0,
+        "expected files_indexed + files_skipped > 0, got indexed={files_indexed} skipped={files_skipped}"
     );
-    eprintln!("chunks upserted: {chunks_upserted} — Phase 2 OK");
+    eprintln!("Phase 2 OK — files_indexed={files_indexed}, files_skipped={files_skipped}");
 
     // ── Phase 3: serve + MCP round-trip ─────────────────────────────────────
     eprintln!("\n=== Phase 3: ctx serve + MCP round-trip ===");
@@ -192,44 +245,45 @@ async fn hotwash_e2e_full_flow() {
         })
         .collect::<String>();
     eprintln!("repo_status text: {status_text}");
+    // Hard assertion: the store must actually contain chunks from either this
+    // run or a prior run. This catches the case where the index silently did
+    // nothing and yet some other plumbing returned ok.
+    assert!(
+        status_text.contains("\"chunks_total\":") && !status_text.contains("\"chunks_total\":0"),
+        "repo_status reports zero chunks_total — index never populated the store: {status_text}"
+    );
     eprintln!("repo_status: OK");
 
-    // ── tsserver wiring: find_definition returns hits for a TS symbol ────────
-    // Verify tsserver-backed symbol extraction produced results. We iterate a
-    // set of candidate names that are likely to exist as top-level exports in
-    // hotwash's TS/TSX files and assert at least one returns a "line" field,
-    // proving the RefStore was populated by the tsserver navtree path.
-    eprintln!("\n--- find_definition (tsserver wiring check) ---");
-    let candidate_names = ["App", "Button", "Home", "Header", "Footer", "Index"];
-    let mut any_hit = false;
-    for name in candidate_names {
-        let result = tokio::time::timeout(
-            Duration::from_secs(15),
-            client.call_tool(
-                rmcp::model::CallToolRequestParams::new("find_definition").with_arguments(
-                    json!({ "name": name })
-                        .as_object()
-                        .expect("json object")
-                        .clone(),
-                ),
+    // ── LSP wiring: find_definition returns hits for a TS symbol ─────────────
+    // Verify LSP-backed (tsgo) symbol extraction produced results.
+    // We dynamically pick a known `export function` from hotwash's TS sources
+    // so the test doesn't break if a specific symbol is renamed.
+    eprintln!("\n--- find_definition (LSP / tsgo wiring check) ---");
+    let target = pick_hotwash_target(&repo)
+        .expect("expected to find at least one `export function` in hotwash TS sources");
+    eprintln!("LSP wiring target symbol: {target}");
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        client.call_tool(
+            rmcp::model::CallToolRequestParams::new("find_definition").with_arguments(
+                json!({ "name": target })
+                    .as_object()
+                    .expect("json object")
+                    .clone(),
             ),
-        )
-        .await
-        .expect("find_definition timed out")
-        .expect("find_definition tool call failed");
-        let content = format!("{:?}", result.content);
-        if content.contains("\"line\"") {
-            eprintln!("find_definition({name}) returned hits: {content}");
-            any_hit = true;
-            break;
-        }
-        eprintln!("find_definition({name}): no hits");
-    }
+        ),
+    )
+    .await
+    .expect("find_definition timed out")
+    .expect("find_definition tool call failed");
+    let content = format!("{:?}", result.content);
     assert!(
-        any_hit,
-        "no tsserver-backed find_definition hits across candidate names {candidate_names:?}"
+        content.contains("\"line\""),
+        "LSP-backed find_definition({target}) returned no hits — \
+         tsgo symbol extraction may not be wired correctly: {content}"
     );
-    eprintln!("tsserver wiring: OK");
+    eprintln!("find_definition({target}) returned hits: {content}");
+    eprintln!("LSP (tsgo) wiring: OK");
 
     // ── Clean shutdown ───────────────────────────────────────────────────────
     eprintln!("\n=== Shutdown ===");

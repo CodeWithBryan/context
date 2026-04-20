@@ -39,6 +39,8 @@ rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["full"] }
 dirs.workspace = true
+walkdir.workspace = true
+regex = "1"
 
 [lints]
 workspace = true

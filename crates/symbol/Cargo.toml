@@ -17,6 +17,8 @@ tokio = { workspace = true, features = ["process", "io-util", "macros", "rt-mult
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+lsp-types.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

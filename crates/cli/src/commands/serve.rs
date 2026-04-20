@@ -28,11 +28,11 @@ pub async fn run(path: &Path) -> Result<()> {
     let refs = Arc::new(refs);
     let embedder = Arc::new(embedder);
 
-    let tsserver = ctx_symbol::tsserver::TsServer::try_spawn(&abs).await?;
+    let ts_lsp = ctx_symbol::lsp::launchers::tsgo::try_spawn(&abs).await?;
     // Pipeline for the watcher side — shares the same Arc'd stores as the Router.
     let pipeline = Arc::new(
         Pipeline::new_shared(chunks.clone(), refs.clone(), embedder.clone())
-            .with_tsserver(tsserver.map(Arc::new)),
+            .with_ts_lsp(ts_lsp.map(Arc::new)),
     );
     let scope = Scope::local(&abs, &abs, super::index::current_branch(&abs).ok())?;
 
@@ -62,8 +62,8 @@ pub async fn run(path: &Path) -> Result<()> {
     let server: ProductionCtxMcpServer = CtxMcpServer::new(Arc::new(router), scope);
     server.serve_stdio().await?;
 
-    // Best-effort tsserver cleanup after the MCP client disconnects.
-    if let Some(ts) = pipeline.tsserver_ref() {
+    // Best-effort LSP cleanup after the MCP client disconnects.
+    if let Some(ts) = pipeline.ts_lsp_ref() {
         let _ = ts.shutdown().await;
     }
     Ok(())

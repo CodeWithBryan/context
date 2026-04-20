@@ -20,8 +20,8 @@ pub async fn run(path: &Path) -> Result<()> {
         .context("open chunk store")?;
     let refs = RedbRefStore::open(crate::config::refs_file(&abs)?)?;
 
-    let tsserver = ctx_symbol::tsserver::TsServer::try_spawn(&abs).await?;
-    let pipeline = Pipeline::new(chunks, refs, embedder).with_tsserver(tsserver.map(Arc::new));
+    let ts_lsp = ctx_symbol::lsp::launchers::tsgo::try_spawn(&abs).await?;
+    let pipeline = Pipeline::new(chunks, refs, embedder).with_ts_lsp(ts_lsp.map(Arc::new));
     let scope = Scope::local(&abs, &abs, current_branch(&abs).ok()).context("construct scope")?;
 
     let report = pipeline.full_index(&scope, &abs).await?;
