@@ -121,18 +121,27 @@ jobs:
           umask 077
           echo "$P12_B64" | base64 -d > cert.p12
 
-      - name: Decode App Store Connect API key
+      - name: Build App Store Connect API key JSON
         shell: bash
         env:
           P8_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           umask 077
-          # indygreg/apple-code-sign-action expects the key at:
-          # private_keys/AuthKey_<KEY_ID>.p8
-          mkdir -p private_keys
-          echo "$P8_B64" | base64 -d > "private_keys/AuthKey_${KEY_ID}.p8"
+          echo "$P8_B64" | base64 -d > /tmp/AuthKey.p8
+          # Build the rcodesign api-key JSON bundle — the action wraps
+          # `rcodesign notary-submit --api-key-file <json>`, which expects
+          # a single JSON file containing key_id + issuer_id + PEM private key.
+          jq -n \
+            --arg key_id "$KEY_ID" \
+            --arg issuer_id "$ISSUER_ID" \
+            --rawfile pk /tmp/AuthKey.p8 \
+            '{key_id: $key_id, issuer_id: $issuer_id, private_key: $pk}' \
+            > api-key.json
+          chmod 600 api-key.json
+          rm /tmp/AuthKey.p8
 
       - name: Sign, notarize, and staple
         uses: indygreg/apple-code-sign-action@v1
@@ -144,8 +153,7 @@ jobs:
           staple: true
           p12_file: cert.p12
           p12_password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
-          app_store_connect_api_issuer: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          app_store_connect_api_key: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          app_store_connect_api_key_json_file: api-key.json
 
       - name: Package signed binary as tarball
         id: tarball
@@ -205,4 +213,4 @@ jobs:
 
       - name: Wipe secrets from disk
         if: always()
-        run: rm -rf cert.p12 private_keys signed
+        run: rm -rf cert.p12 api-key.json signed
