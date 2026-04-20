@@ -11,8 +11,6 @@ env:
   # sccache uses GitHub Actions cache as a shared compiler cache.
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
-  # Pin rcodesign version for reproducibility.
-  RCODESIGN_VERSION: "0.29.0"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -25,8 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # xlarge = 12 CPU / 28 GB RAM. Cost is ~equivalent per CPU-minute
-          # vs the 3-CPU runner, but wall clock finishes ~4× faster.
+          # xlarge = 12 CPU / 28 GB RAM.
           - target: aarch64-apple-darwin
             runner: macos-14-xlarge
             strip_cmd: strip -x
@@ -81,9 +78,8 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Sign + notarize + publish — all on Linux via rcodesign.
-  # rcodesign is a pure-Rust reimplementation of Apple's codesign/notarytool
-  # that can sign and notarize Mach-O binaries without needing macOS.
+  # Sign + notarize + staple + publish — all on Linux.
+  # Uses indygreg/apple-code-sign-action which wraps rcodesign.
   # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: Sign, Notarize, and Publish
@@ -102,16 +98,8 @@ jobs:
           name: ctx-aarch64-apple-darwin-unsigned
           path: unsigned/
 
-      - name: Install rcodesign
-        shell: bash
-        run: |
-          set -euo pipefail
-          URL="https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          curl -fsSL "$URL" -o /tmp/rcodesign.tar.gz
-          mkdir -p /tmp/rcodesign
-          tar -xzf /tmp/rcodesign.tar.gz -C /tmp/rcodesign --strip-components=1
-          sudo install -m 0755 /tmp/rcodesign/rcodesign /usr/local/bin/rcodesign
-          rcodesign --version
+      - name: Make binary executable
+        run: chmod +x unsigned/ctx
 
       - name: Determine version
         id: version
@@ -120,33 +108,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            # workflow_dispatch: read workspace.package.version from the checked-out tree
             V=$(grep -E '^version = "' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
             echo "version=v${V}" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Decode App Store Connect API key
-        shell: bash
-        env:
-          P8_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
-          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p ~/.apple-keys
-          echo "$P8_B64" | base64 -d > ~/.apple-keys/AuthKey.p8
-          # Build rcodesign's api-key JSON manually — the `encode-app-store-connect-api-key`
-          # subcommand trips over whatever config file rcodesign auto-discovers in CWD
-          # (likely Cargo.toml being mis-interpreted). Constructing the JSON directly
-          # with jq avoids the issue and is equivalent.
-          jq -n \
-            --arg key_id "$KEY_ID" \
-            --arg issuer_id "$ISSUER_ID" \
-            --rawfile pk ~/.apple-keys/AuthKey.p8 \
-            '{key_id: $key_id, issuer_id: $issuer_id, private_key: $pk}' \
-            > ~/.apple-keys/api-key.json
-          chmod 600 ~/.apple-keys/api-key.json
 
       - name: Decode Developer ID signing cert
         shell: bash
@@ -155,47 +119,33 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          echo "$P12_B64" | base64 -d > ~/.apple-keys/DeveloperID.p12
+          echo "$P12_B64" | base64 -d > cert.p12
 
-      - name: Sign binary
+      - name: Decode App Store Connect API key
         shell: bash
         env:
-          P12_PW: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          P8_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
         run: |
           set -euo pipefail
-          # --code-signature-flags=runtime enables the Hardened Runtime, required
-          # for notarization. We pipe the p12 password via file to avoid having
-          # it appear in the process argv.
-          PW_FILE=$(mktemp)
-          printf '%s' "$P12_PW" > "$PW_FILE"
-          chmod 600 "$PW_FILE"
-          rcodesign --config-file /dev/null sign \
-            --p12-file ~/.apple-keys/DeveloperID.p12 \
-            --p12-password-file "$PW_FILE" \
-            --code-signature-flags runtime \
-            unsigned/ctx
-          rm "$PW_FILE"
-          # Sanity: rcodesign verifies its own signature
-          rcodesign --config-file /dev/null verify unsigned/ctx
+          umask 077
+          # indygreg/apple-code-sign-action expects the key at:
+          # private_keys/AuthKey_<KEY_ID>.p8
+          mkdir -p private_keys
+          echo "$P8_B64" | base64 -d > "private_keys/AuthKey_${KEY_ID}.p8"
 
-      - name: Zip signed binary for notarization
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd unsigned
-          zip -9 ../ctx-for-notary.zip ctx
-
-      - name: Submit for notarization and wait
-        shell: bash
-        run: |
-          set -euo pipefail
-          # rcodesign polls Apple's REST API until the submission is Accepted
-          # or rejected. On this cheap Linux runner ($0.008/min), even a 60-min
-          # wait costs <$0.50 worst case.
-          rcodesign --config-file /dev/null notary-submit \
-            --api-key-file ~/.apple-keys/api-key.json \
-            --wait \
-            ctx-for-notary.zip
+      - name: Sign, notarize, and staple
+        uses: indygreg/apple-code-sign-action@v1
+        with:
+          input_path: unsigned/ctx
+          output_path: signed/ctx
+          sign: true
+          notarize: true
+          staple: true
+          p12_file: cert.p12
+          p12_password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          app_store_connect_api_issuer: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          app_store_connect_api_key: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
 
       - name: Package signed binary as tarball
         id: tarball
@@ -206,7 +156,8 @@ jobs:
           TARGET="aarch64-apple-darwin"
           ARCHIVE_NAME="ctx-${VERSION}-${TARGET}.tar.gz"
           mkdir -p dist staging
-          cp unsigned/ctx staging/
+          cp signed/ctx staging/
+          chmod +x staging/ctx
           cp README.md LICENSE staging/
           tar -czf "dist/${ARCHIVE_NAME}" -C staging .
           echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
@@ -252,6 +203,6 @@ jobs:
             dist/ctx-*.tar.gz
             dist/SHA256SUMS
 
-      - name: Wipe keys
+      - name: Wipe secrets from disk
         if: always()
-        run: rm -rf ~/.apple-keys
+        run: rm -rf cert.p12 private_keys signed
