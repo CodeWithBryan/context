@@ -12,3 +12,6 @@ tokenizer.json
 # Accidental rustc-scratch outputs
 /rust_out
 /a.out
+
+# Test-created fixture (tsserver integration test writes this at runtime)
+/crates/symbol/tests/fixtures/sample.ts
