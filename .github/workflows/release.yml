@@ -169,13 +169,16 @@ jobs:
           ZIP_NAME="ctx-${VERSION}-${TARGET}.zip"
           ditto -c -k --keepParent sign_work/ctx "${ZIP_NAME}"
 
-          # Submit for notarization and wait (up to 15 min)
+          # Submit for notarization and wait (up to 40 min).
+          # Apple's queue normally finishes in 5-15 min but can spike to 30+ min
+          # during peak hours. The cheap macos-14 runner costs ~$0.08/min so
+          # even a 40-min wait is ~$3 worst-case.
           xcrun notarytool submit "${ZIP_NAME}" \
             --apple-id "${APPLE_ID}" \
             --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
             --team-id "${APPLE_TEAM_ID}" \
             --wait \
-            --timeout 900
+            --timeout 2400
 
           # Staple notarization ticket to the binary
           xcrun stapler staple sign_work/ctx
