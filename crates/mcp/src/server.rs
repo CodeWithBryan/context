@@ -232,7 +232,7 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
 
     /// Retrieve a single chunk by its hex-encoded Blake3 content hash.
     #[tool(
-        description = "Retrieve a code chunk by its 64-character hex-encoded Blake3 content hash."
+        description = "Retrieve a code chunk by its 64-character hex-encoded Blake3 content hash. Returns the full chunk text plus metadata."
     )]
     #[instrument(skip(self), fields(hash = %args.hash))]
     async fn get_chunk(&self, Parameters(args): Parameters<HashArgs>) -> String {
@@ -241,8 +241,22 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
             Err(msg) => return serde_json::json!({"error": msg}).to_string(),
         };
         match self.router.get_chunk(hash).await {
-            Ok(chunk) => serde_json::to_string(&chunk)
-                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
+            Ok(Some(c)) => serde_json::json!({
+                "hash": c.hash.to_hex(),
+                "file": c.file,
+                "line_start": c.line_range.start,
+                "line_end": c.line_range.end,
+                "byte_start": c.byte_range.start,
+                "byte_end": c.byte_range.end,
+                "kind": format!("{:?}", c.kind),
+                "lang": format!("{:?}", c.lang),
+                "name": c.name,
+                "text": c.text,
+                // Intentionally omit `vector` — 768-dim embedding is useless
+                // to an MCP client and was blowing up token budgets.
+            })
+            .to_string(),
+            Ok(None) => serde_json::json!({"error": "chunk not found"}).to_string(),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
