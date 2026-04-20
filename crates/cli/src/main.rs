@@ -43,6 +43,12 @@ enum Cmd {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// Update ctx to the latest published release.
+    Update {
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -54,6 +60,11 @@ async fn main() -> Result<()> {
         Cmd::Index { path, full: _ } => commands::index::run(&path).await,
         Cmd::Serve { path } => commands::serve::run(&path).await,
         Cmd::Status { path } => commands::status::run(&path).await,
+        Cmd::Update { force } => {
+            // self_update uses blocking I/O; run off the async executor.
+            tokio::task::spawn_blocking(move || commands::update::run(force)).await??;
+            Ok(())
+        }
     }
 }
 

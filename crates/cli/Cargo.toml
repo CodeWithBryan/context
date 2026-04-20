@@ -30,6 +30,11 @@ anyhow.workspace = true
 gix.workspace = true
 async-trait.workspace = true
 blake3.workspace = true
+self_update = { version = "0.41", default-features = false, features = [
+    "rustls",
+    "archive-tar",
+    "compression-flate2",
+] }
 
 [dev-dependencies]
 assert_cmd = "2"
