@@ -97,6 +97,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # actions: read is required to download artifacts from a different
+      # workflow run (the reuse_build_run_id path).
+      actions: read
 
     steps:
       - name: Checkout (for README, LICENSE)
