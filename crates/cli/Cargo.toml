@@ -34,6 +34,10 @@ blake3.workspace = true
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+dirs.workspace = true
 
 [lints]
 workspace = true
