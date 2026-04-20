@@ -218,6 +218,26 @@ jobs:
           name: ctx-x86_64-apple-darwin-signed
           path: dist/
 
+      - name: Create `latest` aliases (non-prerelease only)
+        working-directory: dist
+        shell: bash
+        run: |
+          # Copy versioned tarballs to ctx-latest-<target>.tar.gz aliases so
+          # end users can `curl -L .../releases/latest/download/ctx-latest-<target>.tar.gz`
+          # without knowing the current version number. Only emit aliases
+          # when we're publishing a real (non-draft, non-prerelease) tag.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]] && [[ "${GITHUB_REF_NAME}" != *"-rc"* ]] && [[ "${GITHUB_REF_NAME}" != *"-beta"* ]] && [[ "${GITHUB_REF_NAME}" != *"-alpha"* ]]; then
+            for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+              SRC=$(ls ctx-*-${target}.tar.gz 2>/dev/null | head -1)
+              if [[ -n "${SRC}" ]]; then
+                cp "${SRC}" "ctx-latest-${target}.tar.gz"
+                echo "aliased ${SRC} → ctx-latest-${target}.tar.gz"
+              fi
+            done
+          else
+            echo "skipping latest-* aliases (prerelease or workflow_dispatch)"
+          fi
+
       - name: Generate SHA256SUMS
         working-directory: dist
         run: sha256sum ctx-*.tar.gz > SHA256SUMS
