@@ -5,10 +5,28 @@ use std::path::PathBuf;
 mod commands;
 mod config;
 
+// Release tag embedded by CI (e.g. "0.1.0-15"). Falls back to the Cargo.toml
+// version for local/dev builds. Kept at module scope so clap can use it as the
+// `version` attribute.
+pub(crate) const CTX_VERSION: &str = match option_env!("CTX_RELEASE_VERSION") {
+    Some(s) => trim_leading_v(s),
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+const fn trim_leading_v(s: &str) -> &str {
+    match s.as_bytes() {
+        [b'v', ..] => match s.split_at_checked(1) {
+            Some((_, rest)) => rest,
+            None => s,
+        },
+        _ => s,
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "ctx",
-    version,
+    version = CTX_VERSION,
     about = "Local context engine for TS/JS/CSS/HTML"
 )]
 struct Cli {

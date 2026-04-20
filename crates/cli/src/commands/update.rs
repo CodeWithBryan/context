@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 
 pub fn run(force: bool) -> Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
+    // `crate::CTX_VERSION` is injected at build time (CI) or falls back to the
+    // workspace Cargo.toml version for local/dev builds. Either way, no leading
+    // `v` — matches what self_update strips off tag names.
+    let current = crate::CTX_VERSION;
 
     let status = self_update::backends::github::Update::configure()
         .repo_owner("CodeWithBryan")
