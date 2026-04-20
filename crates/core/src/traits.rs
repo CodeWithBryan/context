@@ -28,14 +28,22 @@ pub trait ChunkStore: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub enum SymbolQuery {
-    Definition { name: String },
-    References { name: String },
-    Callers { name: String },
+    Definition {
+        name: String,
+    },
+    References {
+        name: String,
+    },
+    Callers {
+        name: String,
+    },
     /// Not yet implemented in Phase 1 — `RefStore` impls must return
     /// `Err(CtxError::Unimplemented(...))` rather than an empty `Vec`.
     /// Implementation is scheduled for a later task when the ref-by-file
     /// index is added.
-    ByFile { file: String },
+    ByFile {
+        file: String,
+    },
 }
 
 #[async_trait]

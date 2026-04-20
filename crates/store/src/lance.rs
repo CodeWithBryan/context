@@ -18,22 +18,24 @@
 //               Selector=7, Element=8, Document=9
 // Changing these values would invalidate any persisted LanceDB table.
 
-use async_trait::async_trait;
 use arrow_array::{
-    Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
-    StringArray, UInt32Array, UInt64Array, UInt8Array,
-    builder::{FixedSizeBinaryBuilder, FixedSizeListBuilder, Float32Builder, StringBuilder,
-              UInt32Builder, UInt64Builder, UInt8Builder},
+    builder::{
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, Float32Builder, StringBuilder, UInt32Builder,
+        UInt64Builder, UInt8Builder,
+    },
+    Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch, StringArray,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use ctx_core::traits::{ChunkStore, Filter};
 use ctx_core::types::{ByteRange, LineRange};
 use ctx_core::{Chunk, ChunkKind, ContentHash, CtxError, Hit, Language, Result};
 use futures::TryStreamExt;
-use lancedb::Error as LanceError;
 use lancedb::connection::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
+use lancedb::Error as LanceError;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -43,13 +45,13 @@ const TABLE_NAME: &str = "chunks";
 
 fn lang_to_u8(l: Language) -> u8 {
     match l {
-        Language::TypeScript  => 0,
-        Language::Tsx         => 1,
-        Language::JavaScript  => 2,
-        Language::Jsx         => 3,
-        Language::Css         => 4,
-        Language::Html        => 5,
-        Language::Json        => 6,
+        Language::TypeScript => 0,
+        Language::Tsx => 1,
+        Language::JavaScript => 2,
+        Language::Jsx => 3,
+        Language::Css => 4,
+        Language::Html => 5,
+        Language::Json => 6,
     }
 }
 
@@ -68,16 +70,16 @@ fn u8_to_lang(x: u8) -> Result<Language> {
 
 fn kind_to_u8(k: ChunkKind) -> u8 {
     match k {
-        ChunkKind::Function  => 0,
-        ChunkKind::Method    => 1,
-        ChunkKind::Class     => 2,
+        ChunkKind::Function => 0,
+        ChunkKind::Method => 1,
+        ChunkKind::Class => 2,
         ChunkKind::Interface => 3,
-        ChunkKind::Type      => 4,
-        ChunkKind::Const     => 5,
-        ChunkKind::Enum      => 6,
-        ChunkKind::Selector  => 7,
-        ChunkKind::Element   => 8,
-        ChunkKind::Document  => 9,
+        ChunkKind::Type => 4,
+        ChunkKind::Const => 5,
+        ChunkKind::Enum => 6,
+        ChunkKind::Selector => 7,
+        ChunkKind::Element => 8,
+        ChunkKind::Document => 9,
     }
 }
 
@@ -100,21 +102,22 @@ fn u8_to_kind(x: u8) -> Result<ChunkKind> {
 // ── Schema ────────────────────────────────────────────────────────────────────
 
 fn chunk_schema(dim: usize) -> Schema {
-    let dim_i32 = i32::try_from(dim).expect("dim fits in i32: model output dimensions never exceed i32::MAX");
+    let dim_i32 =
+        i32::try_from(dim).expect("dim fits in i32: model output dimensions never exceed i32::MAX");
     let vector_item = Field::new("item", DataType::Float32, true);
     let vector_list = DataType::FixedSizeList(Arc::new(vector_item), dim_i32);
     Schema::new(vec![
-        Field::new("hash",       DataType::FixedSizeBinary(32), false),
-        Field::new("file",       DataType::Utf8,                false),
-        Field::new("lang",       DataType::UInt8,               false),
-        Field::new("kind",       DataType::UInt8,               false),
-        Field::new("name",       DataType::Utf8,                true),
-        Field::new("byte_start", DataType::UInt64,              false),
-        Field::new("byte_end",   DataType::UInt64,              false),
-        Field::new("line_start", DataType::UInt32,              false),
-        Field::new("line_end",   DataType::UInt32,              false),
-        Field::new("text",       DataType::Utf8,                false),
-        Field::new("vector",     vector_list,                   false),
+        Field::new("hash", DataType::FixedSizeBinary(32), false),
+        Field::new("file", DataType::Utf8, false),
+        Field::new("lang", DataType::UInt8, false),
+        Field::new("kind", DataType::UInt8, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("byte_start", DataType::UInt64, false),
+        Field::new("byte_end", DataType::UInt64, false),
+        Field::new("line_start", DataType::UInt32, false),
+        Field::new("line_end", DataType::UInt32, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("vector", vector_list, false),
     ])
 }
 
@@ -122,9 +125,9 @@ fn chunk_schema(dim: usize) -> Schema {
 
 pub struct LanceChunkStore {
     /// Kept alive so `LanceDB` can open new tables / flush background writes.
-    _conn:  Connection,
-    table:  Table,
-    dim:    usize,
+    _conn: Connection,
+    table: Table,
+    dim: usize,
     schema: SchemaRef,
 }
 
@@ -169,7 +172,12 @@ impl LanceChunkStore {
             Err(e) => return Err(CtxError::Store(format!("open_table: {e}"))),
         };
 
-        Ok(Self { _conn: conn, table, dim, schema })
+        Ok(Self {
+            _conn: conn,
+            table,
+            dim,
+            schema,
+        })
     }
 }
 
@@ -213,11 +221,11 @@ impl ChunkStore for LanceChunkStore {
         mi.when_matched_update_all(None)
             .when_not_matched_insert_all();
         mi.execute(Box::new(arrow_array::RecordBatchIterator::new(
-                vec![Ok(batch)],
-                self.schema.clone(),
-            )))
-            .await
-            .map_err(|e| CtxError::Store(format!("merge_insert: {e}")))?;
+            vec![Ok(batch)],
+            self.schema.clone(),
+        )))
+        .await
+        .map_err(|e| CtxError::Store(format!("merge_insert: {e}")))?;
         Ok(())
     }
 
@@ -315,8 +323,7 @@ impl ChunkStore for LanceChunkStore {
                     }
                 }
 
-                let score = distance
-                    .map_or(0.0, |d| 1.0_f32 / (1.0 + d.value(i)));
+                let score = distance.map_or(0.0, |d| 1.0_f32 / (1.0 + d.value(i)));
 
                 hits.push(Hit { chunk, score });
                 if hits.len() >= k {
@@ -363,24 +370,26 @@ impl ChunkStore for LanceChunkStore {
 fn build_record_batch(schema: &SchemaRef, chunks: &[Chunk], dim: usize) -> Result<RecordBatch> {
     let n = chunks.len();
 
-    let mut hash_b       = FixedSizeBinaryBuilder::with_capacity(n, 32);
-    let mut file_b       = StringBuilder::new();
-    let mut lang_b       = UInt8Builder::with_capacity(n);
-    let mut kind_b       = UInt8Builder::with_capacity(n);
-    let mut name_b       = StringBuilder::new();
+    let mut hash_b = FixedSizeBinaryBuilder::with_capacity(n, 32);
+    let mut file_b = StringBuilder::new();
+    let mut lang_b = UInt8Builder::with_capacity(n);
+    let mut kind_b = UInt8Builder::with_capacity(n);
+    let mut name_b = StringBuilder::new();
     let mut byte_start_b = UInt64Builder::with_capacity(n);
-    let mut byte_end_b   = UInt64Builder::with_capacity(n);
+    let mut byte_end_b = UInt64Builder::with_capacity(n);
     let mut line_start_b = UInt32Builder::with_capacity(n);
-    let mut line_end_b   = UInt32Builder::with_capacity(n);
-    let mut text_b       = StringBuilder::new();
+    let mut line_end_b = UInt32Builder::with_capacity(n);
+    let mut text_b = StringBuilder::new();
 
-    let dim_i32 = i32::try_from(dim).expect("dim fits in i32: model output dimensions never exceed i32::MAX");
+    let dim_i32 =
+        i32::try_from(dim).expect("dim fits in i32: model output dimensions never exceed i32::MAX");
     let mut vector_b = FixedSizeListBuilder::new(Float32Builder::new(), dim_i32);
 
     for c in chunks {
-        let vec = c.vector.as_ref().ok_or_else(|| {
-            CtxError::Store(format!("chunk {} has no vector", c.hash.to_hex()))
-        })?;
+        let vec = c
+            .vector
+            .as_ref()
+            .ok_or_else(|| CtxError::Store(format!("chunk {} has no vector", c.hash.to_hex())))?;
         if vec.len() != dim {
             return Err(CtxError::Store(format!(
                 "chunk {} vector len {} != dim {}",
@@ -398,7 +407,7 @@ fn build_record_batch(schema: &SchemaRef, chunks: &[Chunk], dim: usize) -> Resul
         kind_b.append_value(kind_to_u8(c.kind));
         match &c.name {
             Some(n) => name_b.append_value(n),
-            None    => name_b.append_null(),
+            None => name_b.append_null(),
         }
         // usize→u64: safe on all Rust targets (usize ≤ 64 bits).
         byte_start_b.append_value(u64::try_from(c.byte_range.start).unwrap_or(u64::MAX));
@@ -414,17 +423,17 @@ fn build_record_batch(schema: &SchemaRef, chunks: &[Chunk], dim: usize) -> Resul
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(hash_b.finish())       as Arc<dyn Array>,
-            Arc::new(file_b.finish())       as Arc<dyn Array>,
-            Arc::new(lang_b.finish())       as Arc<dyn Array>,
-            Arc::new(kind_b.finish())       as Arc<dyn Array>,
-            Arc::new(name_b.finish())       as Arc<dyn Array>,
+            Arc::new(hash_b.finish()) as Arc<dyn Array>,
+            Arc::new(file_b.finish()) as Arc<dyn Array>,
+            Arc::new(lang_b.finish()) as Arc<dyn Array>,
+            Arc::new(kind_b.finish()) as Arc<dyn Array>,
+            Arc::new(name_b.finish()) as Arc<dyn Array>,
             Arc::new(byte_start_b.finish()) as Arc<dyn Array>,
-            Arc::new(byte_end_b.finish())   as Arc<dyn Array>,
+            Arc::new(byte_end_b.finish()) as Arc<dyn Array>,
             Arc::new(line_start_b.finish()) as Arc<dyn Array>,
-            Arc::new(line_end_b.finish())   as Arc<dyn Array>,
-            Arc::new(text_b.finish())       as Arc<dyn Array>,
-            Arc::new(vector_b.finish())     as Arc<dyn Array>,
+            Arc::new(line_end_b.finish()) as Arc<dyn Array>,
+            Arc::new(text_b.finish()) as Arc<dyn Array>,
+            Arc::new(vector_b.finish()) as Arc<dyn Array>,
         ],
     )
     .map_err(|e| CtxError::Store(format!("RecordBatch::try_new: {e}")))?;
@@ -434,17 +443,17 @@ fn build_record_batch(schema: &SchemaRef, chunks: &[Chunk], dim: usize) -> Resul
 
 /// Reconstruct a `Chunk` from a single row of a `RecordBatch`.
 fn batch_row_to_chunk(batch: &RecordBatch, row: usize, dim: usize) -> Result<Chunk> {
-    let hash_arr  = col_as::<FixedSizeBinaryArray>(batch, "hash")?;
-    let file_arr  = col_as::<StringArray>(batch, "file")?;
-    let lang_arr  = col_as::<UInt8Array>(batch, "lang")?;
-    let kind_arr  = col_as::<UInt8Array>(batch, "kind")?;
-    let name_arr  = col_as::<StringArray>(batch, "name")?;
-    let bst_arr   = col_as::<UInt64Array>(batch, "byte_start")?;
-    let bend_arr  = col_as::<UInt64Array>(batch, "byte_end")?;
-    let lst_arr   = col_as::<UInt32Array>(batch, "line_start")?;
-    let lend_arr  = col_as::<UInt32Array>(batch, "line_end")?;
-    let text_arr  = col_as::<StringArray>(batch, "text")?;
-    let vec_arr   = col_as::<FixedSizeListArray>(batch, "vector")?;
+    let hash_arr = col_as::<FixedSizeBinaryArray>(batch, "hash")?;
+    let file_arr = col_as::<StringArray>(batch, "file")?;
+    let lang_arr = col_as::<UInt8Array>(batch, "lang")?;
+    let kind_arr = col_as::<UInt8Array>(batch, "kind")?;
+    let name_arr = col_as::<StringArray>(batch, "name")?;
+    let bst_arr = col_as::<UInt64Array>(batch, "byte_start")?;
+    let bend_arr = col_as::<UInt64Array>(batch, "byte_end")?;
+    let lst_arr = col_as::<UInt32Array>(batch, "line_start")?;
+    let lend_arr = col_as::<UInt32Array>(batch, "line_end")?;
+    let text_arr = col_as::<StringArray>(batch, "text")?;
+    let vec_arr = col_as::<FixedSizeListArray>(batch, "vector")?;
 
     let hash_bytes: [u8; 32] = hash_arr
         .value(row)
@@ -473,10 +482,10 @@ fn batch_row_to_chunk(batch: &RecordBatch, row: usize, dim: usize) -> Result<Chu
     let vector: Vec<f32> = (0..floats.len()).map(|i| floats.value(i)).collect();
 
     Ok(Chunk {
-        hash:       ContentHash(hash_bytes),
-        file:       file_arr.value(row).to_string(),
-        lang:       u8_to_lang(lang_arr.value(row))?,
-        kind:       u8_to_kind(kind_arr.value(row))?,
+        hash: ContentHash(hash_bytes),
+        file: file_arr.value(row).to_string(),
+        lang: u8_to_lang(lang_arr.value(row))?,
+        kind: u8_to_kind(kind_arr.value(row))?,
         name,
         byte_range: ByteRange::new(
             usize::try_from(bst_arr.value(row))
@@ -484,11 +493,8 @@ fn batch_row_to_chunk(batch: &RecordBatch, row: usize, dim: usize) -> Result<Chu
             usize::try_from(bend_arr.value(row))
                 .map_err(|_| CtxError::Store("byte_end overflows usize".into()))?,
         ),
-        line_range: LineRange::new(
-            lst_arr.value(row),
-            lend_arr.value(row),
-        ),
-        text:   text_arr.value(row).to_string(),
+        line_range: LineRange::new(lst_arr.value(row), lend_arr.value(row)),
+        text: text_arr.value(row).to_string(),
         vector: Some(vector),
     })
 }

@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rmcp::{ServiceExt, transport::TokioChildProcess};
+use rmcp::{transport::TokioChildProcess, ServiceExt};
 use serde_json::json;
 
 // ─── Helper ────────────────────────────────────────────────────────────────
@@ -123,10 +123,7 @@ async fn hotwash_e2e_full_flow() {
     eprintln!("server info: {server_info:#?}");
 
     // ── tools/list ───────────────────────────────────────────────────────────
-    let tools = client
-        .list_all_tools()
-        .await
-        .expect("tools/list failed");
+    let tools = client.list_all_tools().await.expect("tools/list failed");
     let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
     eprintln!("tools registered: {names:?}");
 

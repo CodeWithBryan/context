@@ -25,10 +25,9 @@ impl Chunker {
             .ok_or_else(|| CtxError::Parse("parse returned None".into()))?;
 
         let regions = match lang {
-            Language::TypeScript
-            | Language::Tsx
-            | Language::JavaScript
-            | Language::Jsx => ts::extract(&tree, bytes, lang),
+            Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
+                ts::extract(&tree, bytes, lang)
+            }
             Language::Css => css::extract(&tree, bytes),
             Language::Html => html::extract(&tree, bytes),
             Language::Json => json::extract(bytes),

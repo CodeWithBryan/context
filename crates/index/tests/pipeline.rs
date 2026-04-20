@@ -50,7 +50,9 @@ async fn new_pipeline(
     root: &Path,
     dim: usize,
 ) -> (Pipeline<LanceChunkStore, RedbRefStore, MockEmbedder>, Scope) {
-    let chunks = LanceChunkStore::open(root.join("lance"), dim).await.unwrap();
+    let chunks = LanceChunkStore::open(root.join("lance"), dim)
+        .await
+        .unwrap();
     let refs = RedbRefStore::open(root.join("refs.redb")).unwrap();
     let embed = MockEmbedder { dim };
     let pipeline = Pipeline::new(chunks, refs, embed);

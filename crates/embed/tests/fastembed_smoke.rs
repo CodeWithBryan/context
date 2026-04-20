@@ -4,7 +4,9 @@ use ctx_embed::FastembedEmbedder;
 #[tokio::test]
 #[ignore = "downloads ~150MB model on first run; run with `cargo test --ignored -p ctx-embed`"]
 async fn embeds_two_strings_with_expected_dim() {
-    let embedder = FastembedEmbedder::new_default().await.expect("init embedder");
+    let embedder = FastembedEmbedder::new_default()
+        .await
+        .expect("init embedder");
     let out = embedder
         .embed(&[
             "function add(a: number, b: number) { return a + b; }",

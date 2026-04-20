@@ -23,9 +23,7 @@ pub fn extract(tree: &Tree, src: &[u8]) -> Vec<Region> {
             let cap_name = QUERY.capture_names()[cap.index as usize];
             match cap_name {
                 "sel" => {
-                    selector = Some(
-                        cap.node.utf8_text(src).unwrap_or("").trim().to_string(),
-                    );
+                    selector = Some(cap.node.utf8_text(src).unwrap_or("").trim().to_string());
                 }
                 "rule" => node = Some(cap.node),
                 _ => {}

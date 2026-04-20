@@ -32,15 +32,22 @@ impl TsServer {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()) // Fix 6: pipe stderr for debuggability
             .current_dir(project_root);
-        let mut child =
-            cmd.spawn().map_err(|e| CtxError::Symbol(format!("spawn node: {e}")))?;
-        let stdin =
-            child.stdin.take().ok_or_else(|| CtxError::Symbol("no stdin".into()))?;
-        let stdout =
-            child.stdout.take().ok_or_else(|| CtxError::Symbol("no stdout".into()))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| CtxError::Symbol(format!("spawn node: {e}")))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CtxError::Symbol("no stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| CtxError::Symbol("no stdout".into()))?;
         // Fix 6: forward tsserver stderr lines to tracing::debug!
-        let stderr =
-            child.stderr.take().ok_or_else(|| CtxError::Symbol("no stderr".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| CtxError::Symbol("no stderr".into()))?;
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
             let mut line = String::new();
@@ -200,10 +207,9 @@ impl TsServer {
                 if let (Some(file_str), Some(start)) =
                     (item.get("file").and_then(Value::as_str), item.get("start"))
                 {
-                    let sym_line = u32::try_from(
-                        start.get("line").and_then(Value::as_u64).unwrap_or(0),
-                    )
-                    .unwrap_or(u32::MAX);
+                    let sym_line =
+                        u32::try_from(start.get("line").and_then(Value::as_u64).unwrap_or(0))
+                            .unwrap_or(u32::MAX);
                     out.push(Symbol {
                         name: String::new(),
                         kind: ChunkKind::Function,
@@ -239,10 +245,9 @@ impl TsServer {
                 if let (Some(file_str), Some(start)) =
                     (item.get("file").and_then(Value::as_str), item.get("start"))
                 {
-                    let sym_line = u32::try_from(
-                        start.get("line").and_then(Value::as_u64).unwrap_or(0),
-                    )
-                    .unwrap_or(u32::MAX);
+                    let sym_line =
+                        u32::try_from(start.get("line").and_then(Value::as_u64).unwrap_or(0))
+                            .unwrap_or(u32::MAX);
                     out.push(Symbol {
                         name: String::new(),
                         kind: ChunkKind::Function,
@@ -263,13 +268,12 @@ impl TsServer {
     }
 }
 
-fn collect_navtree(
-    node: &Value,
-    file: &Path,
-    container: Option<&String>,
-    out: &mut Vec<Symbol>,
-) {
-    let text = node.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+fn collect_navtree(node: &Value, file: &Path, container: Option<&String>, out: &mut Vec<Symbol>) {
+    let text = node
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let kind_str = node.get("kind").and_then(Value::as_str).unwrap_or("");
     let kind = map_tsserver_kind(kind_str);
     let line = u32::try_from(

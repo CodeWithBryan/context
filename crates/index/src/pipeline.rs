@@ -35,7 +35,11 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
     /// Construct a pipeline from pre-existing `Arc`s, allowing the same
     /// store/embedder instances to be shared with a `Router` in `serve`.
     pub fn new_shared(chunks: Arc<C>, refs: Arc<R>, embedder: Arc<E>) -> Self {
-        Self { chunks, refs, embedder }
+        Self {
+            chunks,
+            refs,
+            embedder,
+        }
     }
 
     #[must_use]
@@ -140,7 +144,10 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
         // Skip if the file content hash is unchanged since last index.
         if let Ok(Some(prev)) = self.refs.file_hash(scope, &file_str).await {
             if prev == file_hash {
-                return Ok(FileReport { skipped: true, ..Default::default() });
+                return Ok(FileReport {
+                    skipped: true,
+                    ..Default::default()
+                });
             }
         }
 
@@ -189,8 +196,7 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
                 new_chunks.push(c);
             }
             self.chunks.upsert(&new_chunks).await?;
-            report.chunks_embedded =
-                u64::try_from(new_chunks.len()).unwrap_or(u64::MAX);
+            report.chunks_embedded = u64::try_from(new_chunks.len()).unwrap_or(u64::MAX);
             report.chunks_upserted = report.chunks_embedded;
         }
 

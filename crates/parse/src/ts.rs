@@ -29,19 +29,28 @@ const JS_QUERY_SRC: &str = r"
 // One compiled Query per (grammar, query-source) combination.
 // JS and TSX use different grammars so we build four queries total.
 static TS_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(&languages::tree_sitter_language(Language::TypeScript), TS_QUERY_SRC)
-        .expect("invalid typescript query")
+    Query::new(
+        &languages::tree_sitter_language(Language::TypeScript),
+        TS_QUERY_SRC,
+    )
+    .expect("invalid typescript query")
 });
 
 static TSX_QUERY: LazyLock<Query> = LazyLock::new(|| {
     // Tsx grammar is also used for Jsx.
-    Query::new(&languages::tree_sitter_language(Language::Tsx), TS_QUERY_SRC)
-        .expect("invalid tsx query")
+    Query::new(
+        &languages::tree_sitter_language(Language::Tsx),
+        TS_QUERY_SRC,
+    )
+    .expect("invalid tsx query")
 });
 
 static JS_QUERY: LazyLock<Query> = LazyLock::new(|| {
-    Query::new(&languages::tree_sitter_language(Language::JavaScript), JS_QUERY_SRC)
-        .expect("invalid javascript query")
+    Query::new(
+        &languages::tree_sitter_language(Language::JavaScript),
+        JS_QUERY_SRC,
+    )
+    .expect("invalid javascript query")
 });
 
 fn query_for(lang: Language) -> &'static Query {

@@ -3,9 +3,9 @@
 pub mod debounce;
 
 use ctx_core::{CtxError, Result};
+use notify::RecommendedWatcher;
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
-use notify::RecommendedWatcher;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc;

@@ -135,7 +135,10 @@ async fn reopen_same_dim_preserves_rows() {
     let dir = tempdir().unwrap();
     {
         let store = LanceChunkStore::open(dir.path(), 4).await.unwrap();
-        store.upsert(&[chunk(11, "persist-me", vec![0.1, 0.2, 0.3, 0.4])]).await.unwrap();
+        store
+            .upsert(&[chunk(11, "persist-me", vec![0.1, 0.2, 0.3, 0.4])])
+            .await
+            .unwrap();
         assert_eq!(store.count().await.unwrap(), 1);
     }
     // Drop and reopen

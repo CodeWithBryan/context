@@ -39,13 +39,12 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use ctx_core::{ContentHash, Scope};
 use ctx_core::traits::{ChunkStore, Embedder, RefStore};
+use ctx_core::{ContentHash, Scope};
 use ctx_query::Router;
 use rmcp::{
-    ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    tool, tool_handler, tool_router,
+    tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -103,15 +102,10 @@ pub struct CtxMcpServer<C: ChunkStore, R: RefStore, E: Embedder> {
 }
 
 /// Alias for the production server type.
-pub type ProductionCtxMcpServer = CtxMcpServer<
-    ctx_store::LanceChunkStore,
-    ctx_store::RedbRefStore,
-    ctx_embed::FastembedEmbedder,
->;
+pub type ProductionCtxMcpServer =
+    CtxMcpServer<ctx_store::LanceChunkStore, ctx_store::RedbRefStore, ctx_embed::FastembedEmbedder>;
 
-impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
-    CtxMcpServer<C, R, E>
-{
+impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxMcpServer<C, R, E> {
     /// Create a new MCP server wrapping the given router and scope.
     #[must_use]
     pub fn new(router: Arc<Router<C, R, E>>, scope: Scope) -> Self {
@@ -143,9 +137,7 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
 // ---------------------------------------------------------------------------
 
 #[tool_router]
-impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
-    CtxMcpServer<C, R, E>
-{
+impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxMcpServer<C, R, E> {
     /// Semantic search: find the k most relevant code chunks for a query.
     #[tool(description = "Semantic search over indexed code chunks for the current repo.")]
     #[instrument(skip(self), fields(query = %args.query, k = args.k))]
@@ -155,9 +147,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
             .semantic_search(&self.scope, &args.query, args.k as usize)
             .await
         {
-            Ok(hits) => serde_json::to_string(&hits).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(hits) => serde_json::to_string(&hits)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
@@ -167,9 +158,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
     #[instrument(skip(self), fields(name = %args.name))]
     async fn find_definition(&self, Parameters(args): Parameters<NameArgs>) -> String {
         match self.router.find_definition(&self.scope, &args.name).await {
-            Ok(syms) => serde_json::to_string(&syms).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(syms) => serde_json::to_string(&syms)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
@@ -179,9 +169,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
     #[instrument(skip(self), fields(name = %args.name))]
     async fn find_references(&self, Parameters(args): Parameters<NameArgs>) -> String {
         match self.router.find_references(&self.scope, &args.name).await {
-            Ok(syms) => serde_json::to_string(&syms).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(syms) => serde_json::to_string(&syms)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
@@ -191,9 +180,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
     #[instrument(skip(self), fields(name = %args.name))]
     async fn find_callers(&self, Parameters(args): Parameters<NameArgs>) -> String {
         match self.router.find_callers(&self.scope, &args.name).await {
-            Ok(syms) => serde_json::to_string(&syms).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(syms) => serde_json::to_string(&syms)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
@@ -209,9 +197,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
             Err(msg) => return serde_json::json!({"error": msg}).to_string(),
         };
         match self.router.get_chunk(hash).await {
-            Ok(chunk) => serde_json::to_string(&chunk).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(chunk) => serde_json::to_string(&chunk)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }
@@ -221,9 +208,8 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static>
     #[instrument(skip(self))]
     async fn repo_status(&self, Parameters(_): Parameters<NoArgs>) -> String {
         match self.router.status(&self.scope).await {
-            Ok(status) => serde_json::to_string(&status).unwrap_or_else(|e| {
-                serde_json::json!({"error": e.to_string()}).to_string()
-            }),
+            Ok(status) => serde_json::to_string(&status)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string()),
             Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
         }
     }

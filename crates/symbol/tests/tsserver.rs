@@ -8,7 +8,11 @@ async fn navtree_returns_function_symbols() {
     let fixture_file = fixture_dir.join("sample.ts");
     // Write a fixture on the fly so we don't depend on ctx-parse
     std::fs::create_dir_all(&fixture_dir).ok();
-    std::fs::write(&fixture_file, "export function hello(): string { return 'hi'; }\n").unwrap();
+    std::fs::write(
+        &fixture_file,
+        "export function hello(): string { return 'hi'; }\n",
+    )
+    .unwrap();
 
     let server = TsServer::spawn(&fixture_dir).expect("spawn tsserver");
     let symbols = server.navtree(&fixture_file).await.expect("navtree");
@@ -37,8 +41,7 @@ fn tsserver_graceful_degradation_when_missing() {
 /// is absent, confirming graceful degradation.
 #[tokio::test]
 async fn try_spawn_returns_none_when_tsserver_missing() {
-    let tmp = std::env::temp_dir()
-        .join(format!("ctx-test-none-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("ctx-test-none-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).ok();
     // Clear any env override so we truly test the "nothing found" path.
     let _guard = TempEnv::remove("CTX_TSSERVER_PATH");

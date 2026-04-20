@@ -34,8 +34,9 @@ fn walk_css(tree: &Tree, src: &[u8], file: &str) -> Vec<Symbol> {
             let capture_name = CSS_QUERY.capture_names()[cap.index as usize];
             let text = cap.node.utf8_text(src).unwrap_or("").to_string();
             // Convert 0-indexed row → 1-indexed line number
-            let line =
-                u32::try_from(cap.node.start_position().row).unwrap_or(u32::MAX).saturating_add(1);
+            let line = u32::try_from(cap.node.start_position().row)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1);
             match capture_name {
                 "class_name" => {
                     out.push(Symbol {
@@ -106,8 +107,9 @@ fn walk_html(tree: &Tree, src: &[u8], file: &str) -> Vec<Symbol> {
         for cap in m.captures {
             let capture_name = HTML_QUERY.capture_names()[cap.index as usize];
             let text = cap.node.utf8_text(src).unwrap_or("");
-            let line =
-                u32::try_from(cap.node.start_position().row).unwrap_or(u32::MAX).saturating_add(1);
+            let line = u32::try_from(cap.node.start_position().row)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1);
             match capture_name {
                 "tag" => tag = Some((text.to_string(), line)),
                 "attr_name" => attr_name = Some(text.to_string()),

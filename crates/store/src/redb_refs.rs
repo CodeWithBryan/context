@@ -56,12 +56,13 @@ impl RedbRefStore {
     fn scope_key(scope: &Scope) -> Result<String> {
         if scope.tenant.contains(':') {
             return Err(CtxError::Store(format!(
-                "scope.tenant must not contain ':': {:?}", scope.tenant
+                "scope.tenant must not contain ':': {:?}",
+                scope.tenant
             )));
         }
         if matches!(scope.branch.as_deref(), Some("_none")) {
             return Err(CtxError::Store(
-                "branch name '_none' is reserved as the scope-key None sentinel".into()
+                "branch name '_none' is reserved as the scope-key None sentinel".into(),
             ));
         }
         Ok(format!(
@@ -262,9 +263,7 @@ impl RefStore for RedbRefStore {
                     let high = [0xffu8; 32];
                     let range_start = (key.as_str(), &low);
                     let range_end = (key.as_str(), &high);
-                    let iter = active
-                        .range(range_start..=range_end)
-                        .map_err(store_err)?;
+                    let iter = active.range(range_start..=range_end).map_err(store_err)?;
                     for row in iter {
                         let (k, v) = row.map_err(store_err)?;
                         let (_, hash) = k.value();
@@ -277,15 +276,12 @@ impl RefStore for RedbRefStore {
                     }
                 }
                 for hash in to_remove {
-                    active
-                        .remove((key.as_str(), &hash))
-                        .map_err(store_err)?;
+                    active.remove((key.as_str(), &hash)).map_err(store_err)?;
                 }
 
                 // 2. Clear symbols: scan SYMBOLS_BY_NAME and filter out entries in `file`.
                 //    Rewrite rows that still have symbols for other files; delete empty ones.
-                let mut symbols_by_name =
-                    write.open_table(SYMBOLS_BY_NAME).map_err(store_err)?;
+                let mut symbols_by_name = write.open_table(SYMBOLS_BY_NAME).map_err(store_err)?;
                 let mut updates: Vec<(String, Vec<Symbol>)> = Vec::new();
                 let mut deletions: Vec<String> = Vec::new();
                 {
@@ -302,10 +298,8 @@ impl RefStore for RedbRefStore {
                         let (_, name) = k.value();
                         let stored: Vec<Symbol> =
                             serde_json::from_slice(v.value()).map_err(store_err)?;
-                        let filtered: Vec<Symbol> = stored
-                            .into_iter()
-                            .filter(|s| s.file != file)
-                            .collect();
+                        let filtered: Vec<Symbol> =
+                            stored.into_iter().filter(|s| s.file != file).collect();
                         if filtered.is_empty() {
                             deletions.push(name.to_string());
                         } else {

@@ -29,8 +29,7 @@ pub fn refs_file(abs_path: &Path) -> Result<PathBuf> {
 
 pub fn ensure_per_repo_dirs(abs_path: &Path) -> Result<()> {
     let per_repo = per_repo_dir(abs_path)?;
-    std::fs::create_dir_all(&per_repo)
-        .with_context(|| format!("create {}", per_repo.display()))?;
+    std::fs::create_dir_all(&per_repo).with_context(|| format!("create {}", per_repo.display()))?;
     // lance dir created by LanceDB on first open, but make sure parent exists
     std::fs::create_dir_all(per_repo.join("lance"))?;
     Ok(())

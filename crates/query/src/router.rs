@@ -29,7 +29,11 @@ pub struct Router<C: ChunkStore, R: RefStore, E: Embedder> {
 impl<C: ChunkStore, R: RefStore, E: Embedder> Router<C, R, E> {
     #[must_use]
     pub fn new(chunks: Arc<C>, refs: Arc<R>, embedder: Arc<E>) -> Self {
-        Self { chunks, refs, embedder }
+        Self {
+            chunks,
+            refs,
+            embedder,
+        }
     }
 
     #[must_use]
@@ -74,7 +78,12 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Router<C, R, E> {
     /// Propagates errors from the underlying `RefStore`.
     pub async fn find_definition(&self, scope: &Scope, name: &str) -> Result<Vec<Symbol>> {
         self.refs
-            .symbols(scope, SymbolQuery::Definition { name: name.to_string() })
+            .symbols(
+                scope,
+                SymbolQuery::Definition {
+                    name: name.to_string(),
+                },
+            )
             .await
     }
 
@@ -84,7 +93,12 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Router<C, R, E> {
     /// Propagates errors from the underlying `RefStore`.
     pub async fn find_references(&self, scope: &Scope, name: &str) -> Result<Vec<Symbol>> {
         self.refs
-            .symbols(scope, SymbolQuery::References { name: name.to_string() })
+            .symbols(
+                scope,
+                SymbolQuery::References {
+                    name: name.to_string(),
+                },
+            )
             .await
     }
 
@@ -94,7 +108,12 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Router<C, R, E> {
     /// Propagates errors from the underlying `RefStore`.
     pub async fn find_callers(&self, scope: &Scope, name: &str) -> Result<Vec<Symbol>> {
         self.refs
-            .symbols(scope, SymbolQuery::Callers { name: name.to_string() })
+            .symbols(
+                scope,
+                SymbolQuery::Callers {
+                    name: name.to_string(),
+                },
+            )
             .await
     }
 

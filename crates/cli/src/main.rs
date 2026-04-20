@@ -6,7 +6,11 @@ mod commands;
 mod config;
 
 #[derive(Parser)]
-#[command(name = "ctx", version, about = "Local context engine for TS/JS/CSS/HTML")]
+#[command(
+    name = "ctx",
+    version,
+    about = "Local context engine for TS/JS/CSS/HTML"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

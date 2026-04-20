@@ -53,7 +53,12 @@ async fn upsert_and_find_symbol_definition() {
         .await
         .unwrap();
     let out = store
-        .symbols(&scope, SymbolQuery::Definition { name: "greet".into() })
+        .symbols(
+            &scope,
+            SymbolQuery::Definition {
+                name: "greet".into(),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(out.len(), 1);
@@ -67,7 +72,12 @@ async fn by_file_query_returns_unimplemented_error() {
     let store = RedbRefStore::open(dir.path().join("refs.redb")).unwrap();
     let scope = sample_scope();
     let err = store
-        .symbols(&scope, SymbolQuery::ByFile { file: "a.ts".into() })
+        .symbols(
+            &scope,
+            SymbolQuery::ByFile {
+                file: "a.ts".into(),
+            },
+        )
         .await
         .expect_err("ByFile should be unimplemented in Phase 1");
     assert!(matches!(err, CtxError::Unimplemented(_)));
@@ -113,9 +123,14 @@ async fn scope_key_rejects_reserved_branch_literal_none() {
     // scope-key None sentinel). `bind` must reject it rather than silently
     // colliding with a real None-branch scope.
     let bad_scope = Scope::local(&root, &root, Some("_none".into())).unwrap();
-    let err = store.bind(&bad_scope, &[]).await.expect_err("reserved branch");
-    assert!(matches!(err, ctx_core::CtxError::Store(_)),
-        "expected CtxError::Store, got: {err:?}");
+    let err = store
+        .bind(&bad_scope, &[])
+        .await
+        .expect_err("reserved branch");
+    assert!(
+        matches!(err, ctx_core::CtxError::Store(_)),
+        "expected CtxError::Store, got: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -130,7 +145,12 @@ async fn scope_key_rejects_tenant_with_colon() {
         worktree: WorktreeId(ContentHash::of(b"wt")),
         branch: None,
     };
-    let err = store.bind(&bad_scope, &[]).await.expect_err("reserved tenant");
-    assert!(matches!(err, ctx_core::CtxError::Store(_)),
-        "expected CtxError::Store, got: {err:?}");
+    let err = store
+        .bind(&bad_scope, &[])
+        .await
+        .expect_err("reserved tenant");
+    assert!(
+        matches!(err, ctx_core::CtxError::Store(_)),
+        "expected CtxError::Store, got: {err:?}"
+    );
 }

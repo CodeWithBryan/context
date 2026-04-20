@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use ctx_core::traits::{ChunkStore, Embedder, RefStore, SymbolQuery};
 use ctx_core::types::{ByteRange, LineRange};
-use ctx_core::{Chunk, ChunkKind, ChunkRef, ContentHash, CtxError, Language, Result, Scope, Symbol};
+use ctx_core::{
+    Chunk, ChunkKind, ChunkRef, ContentHash, CtxError, Language, Result, Scope, Symbol,
+};
 use ctx_query::Router;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,17 +16,24 @@ struct MockEmbedder;
 #[async_trait]
 impl Embedder for MockEmbedder {
     async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|t| {
-            let mut v = vec![0.0_f32; 4];
-            #[allow(clippy::cast_precision_loss)]
-            {
-                v[0] = (t.bytes().map(u32::from).sum::<u32>() % 256) as f32;
-            }
-            v
-        }).collect())
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0.0_f32; 4];
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    v[0] = (t.bytes().map(u32::from).sum::<u32>() % 256) as f32;
+                }
+                v
+            })
+            .collect())
     }
-    fn dim(&self) -> usize { 4 }
-    fn model_id(&self) -> &'static str { "mock" }
+    fn dim(&self) -> usize {
+        4
+    }
+    fn model_id(&self) -> &'static str {
+        "mock"
+    }
 }
 
 fn sample_chunk(n: u8, text: &str) -> Chunk {
@@ -51,7 +60,9 @@ async fn make_router(
     Router<ctx_store::LanceChunkStore, ctx_store::RedbRefStore, MockEmbedder>,
     Scope,
 ) {
-    let chunks = ctx_store::LanceChunkStore::open(dir.join("lance"), 4).await.unwrap();
+    let chunks = ctx_store::LanceChunkStore::open(dir.join("lance"), 4)
+        .await
+        .unwrap();
     let refs = ctx_store::RedbRefStore::open(dir.join("refs.redb")).unwrap();
     let embed = MockEmbedder;
     let router = Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(embed));
@@ -67,15 +78,29 @@ async fn semantic_search_applies_active_hash_filter() {
     let (router, scope) = make_router(dir.path()).await;
 
     // Insert 2 chunks directly into the ChunkStore
-    router.chunks().upsert(&[sample_chunk(1, "alpha"), sample_chunk(2, "beta")]).await.unwrap();
+    router
+        .chunks()
+        .upsert(&[sample_chunk(1, "alpha"), sample_chunk(2, "beta")])
+        .await
+        .unwrap();
     // Bind only chunk [1] as active in this scope
-    router.refs().bind(&scope, &[ChunkRef {
-        hash: ContentHash([1; 32]),
-        file: "f1.ts".into(),
-        line_range: LineRange::new(0, 1),
-    }]).await.unwrap();
+    router
+        .refs()
+        .bind(
+            &scope,
+            &[ChunkRef {
+                hash: ContentHash([1; 32]),
+                file: "f1.ts".into(),
+                line_range: LineRange::new(0, 1),
+            }],
+        )
+        .await
+        .unwrap();
 
-    let hits = router.semantic_search(&scope, "query text", 5).await.unwrap();
+    let hits = router
+        .semantic_search(&scope, "query text", 5)
+        .await
+        .unwrap();
     // Even though the search is over all chunks, the active-hash filter should
     // restrict results to chunk [1] only.
     assert_eq!(hits.len(), 1);
@@ -86,13 +111,20 @@ async fn semantic_search_applies_active_hash_filter() {
 async fn find_definition_returns_matching_symbols() {
     let dir = tempdir().unwrap();
     let (router, scope) = make_router(dir.path()).await;
-    router.refs().upsert_symbols(&scope, &[Symbol {
-        name: "greet".into(),
-        kind: ChunkKind::Function,
-        file: "a.ts".into(),
-        line: 10,
-        container: None,
-    }]).await.unwrap();
+    router
+        .refs()
+        .upsert_symbols(
+            &scope,
+            &[Symbol {
+                name: "greet".into(),
+                kind: ChunkKind::Function,
+                file: "a.ts".into(),
+                line: 10,
+                container: None,
+            }],
+        )
+        .await
+        .unwrap();
 
     let syms = router.find_definition(&scope, "greet").await.unwrap();
     assert_eq!(syms.len(), 1);
@@ -104,7 +136,11 @@ async fn get_chunk_by_hash_roundtrips() {
     let dir = tempdir().unwrap();
     let (router, _scope) = make_router(dir.path()).await;
     let original = sample_chunk(42, "answer");
-    router.chunks().upsert(std::slice::from_ref(&original)).await.unwrap();
+    router
+        .chunks()
+        .upsert(std::slice::from_ref(&original))
+        .await
+        .unwrap();
     let got = router.get_chunk(ContentHash([42; 32])).await.unwrap();
     assert!(got.is_some());
     assert_eq!(got.unwrap().hash, original.hash);
@@ -114,12 +150,23 @@ async fn get_chunk_by_hash_roundtrips() {
 async fn status_reports_nonzero_counts() {
     let dir = tempdir().unwrap();
     let (router, scope) = make_router(dir.path()).await;
-    router.chunks().upsert(&[sample_chunk(5, "x"), sample_chunk(6, "y")]).await.unwrap();
-    router.refs().bind(&scope, &[ChunkRef {
-        hash: ContentHash([5; 32]),
-        file: "f5.ts".into(),
-        line_range: LineRange::new(0, 1),
-    }]).await.unwrap();
+    router
+        .chunks()
+        .upsert(&[sample_chunk(5, "x"), sample_chunk(6, "y")])
+        .await
+        .unwrap();
+    router
+        .refs()
+        .bind(
+            &scope,
+            &[ChunkRef {
+                hash: ContentHash([5; 32]),
+                file: "f5.ts".into(),
+                line_range: LineRange::new(0, 1),
+            }],
+        )
+        .await
+        .unwrap();
 
     let status = router.status(&scope).await.unwrap();
     assert_eq!(status.chunks_total, 2);
@@ -138,8 +185,14 @@ async fn by_file_propagates_unimplemented_error_upstream() {
     // not ByFile — so there's no Router method that hits this path today.
     // This test asserts that even if called with the ByFile variant at the RefStore
     // layer (via router.refs()), the error propagates.
-    let err = router.refs()
-        .symbols(&scope, SymbolQuery::ByFile { file: "a.ts".into() })
+    let err = router
+        .refs()
+        .symbols(
+            &scope,
+            SymbolQuery::ByFile {
+                file: "a.ts".into(),
+            },
+        )
         .await
         .expect_err("ByFile should error");
     assert!(matches!(err, CtxError::Unimplemented(_)));

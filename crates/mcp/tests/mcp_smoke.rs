@@ -12,9 +12,8 @@ use ctx_core::{Chunk, ChunkKind, ChunkRef, ContentHash, Result, Scope, Symbol};
 use ctx_mcp::CtxMcpServer;
 use ctx_query::Router;
 use rmcp::{
-    ClientHandler,
     model::{CallToolRequestParams, ClientInfo},
-    ServiceExt,
+    ClientHandler, ServiceExt,
 };
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -103,7 +102,11 @@ async fn list_tools_returns_all_six() -> anyhow::Result<()> {
     let root = dir.path().join("repo");
     std::fs::create_dir_all(&root)?;
     let scope = scope_at(&root);
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -131,7 +134,12 @@ async fn list_tools_returns_all_six() -> anyhow::Result<()> {
             "missing tool '{expected_name}'; got: {names:?}"
         );
     }
-    assert_eq!(names.len(), 6, "expected exactly 6 tools, got {}", names.len());
+    assert_eq!(
+        names.len(),
+        6,
+        "expected exactly 6 tools, got {}",
+        names.len()
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -160,7 +168,11 @@ async fn semantic_search_returns_results() -> anyhow::Result<()> {
     )
     .await?;
 
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -186,7 +198,10 @@ async fn semantic_search_returns_results() -> anyhow::Result<()> {
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("expected JSON array, got: {text:?} — error: {e}"));
     assert!(parsed.is_array(), "expected array, got: {parsed}");
-    assert!(!parsed.as_array().unwrap().is_empty(), "expected at least one hit");
+    assert!(
+        !parsed.as_array().unwrap().is_empty(),
+        "expected at least one hit"
+    );
 
     client.cancel().await?;
     server_handle.await??;
@@ -214,7 +229,11 @@ async fn find_definition_returns_symbol() -> anyhow::Result<()> {
     )
     .await?;
 
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -257,7 +276,11 @@ async fn repo_status_returns_valid_json() -> anyhow::Result<()> {
     std::fs::create_dir_all(&root)?;
     let scope = scope_at(&root);
 
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -269,9 +292,8 @@ async fn repo_status_returns_valid_json() -> anyhow::Result<()> {
     let client = DummyClient.serve(client_transport).await?;
     let result = client
         .call_tool(
-            CallToolRequestParams::new("repo_status").with_arguments(
-                serde_json::json!({}).as_object().unwrap().clone(),
-            ),
+            CallToolRequestParams::new("repo_status")
+                .with_arguments(serde_json::json!({}).as_object().unwrap().clone()),
         )
         .await?;
 
@@ -300,7 +322,11 @@ async fn get_chunk_with_valid_hash_returns_chunk() -> anyhow::Result<()> {
     chunks.upsert(std::slice::from_ref(&c)).await?;
 
     let hash_hex = c.hash.to_hex();
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -341,7 +367,11 @@ async fn get_chunk_with_invalid_hash_returns_error_json() -> anyhow::Result<()> 
     std::fs::create_dir_all(&root)?;
     let scope = scope_at(&root);
 
-    let router = Arc::new(Router::new(Arc::new(chunks), Arc::new(refs), Arc::new(MockEmbedder)));
+    let router = Arc::new(Router::new(
+        Arc::new(chunks),
+        Arc::new(refs),
+        Arc::new(MockEmbedder),
+    ));
     let server = CtxMcpServer::new(router, scope);
 
     let (server_transport, client_transport) = tokio::io::duplex(65_536);
@@ -365,7 +395,10 @@ async fn get_chunk_with_invalid_hash_returns_error_json() -> anyhow::Result<()> 
     let text = extract_text(&result);
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("expected JSON error object, got: {text:?} — error: {e}"));
-    assert!(parsed["error"].is_string(), "expected error field, got: {parsed}");
+    assert!(
+        parsed["error"].is_string(),
+        "expected error field, got: {parsed}"
+    );
 
     client.cancel().await?;
     server_handle.await??;
