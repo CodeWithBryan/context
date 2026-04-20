@@ -1050,6 +1050,20 @@ dependencies = [
 [[package]]
 name = "ctx-symbol"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ctx-core",
+ "ctx-parse",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-css",
+ "tree-sitter-html",
+ "tree-sitter-javascript",
+ "tree-sitter-typescript",
+]
 
 [[package]]
 name = "ctx-watch"

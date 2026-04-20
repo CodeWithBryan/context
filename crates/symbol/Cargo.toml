@@ -6,7 +6,18 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+ctx-core = { path = "../core" }
+ctx-parse = { path = "../parse" }
+tree-sitter.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-javascript.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "macros", "rt-multi-thread", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
