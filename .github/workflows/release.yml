@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -74,9 +76,11 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
+            # Push-to-main or workflow_dispatch: derive version from Cargo.toml
+            # and append the GitHub run number for a unique, monotonic suffix.
             PKG_VERSION=$(cargo metadata --no-deps --format-version 1 \
               | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='ctx-cli'))")
-            echo "version=v${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "version=v${PKG_VERSION}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload unsigned binary
@@ -132,7 +136,7 @@ jobs:
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             V=$(grep -E '^version = "' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-            echo "version=v${V}" >> "$GITHUB_OUTPUT"
+            echo "version=v${V}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Decode Developer ID signing cert
@@ -242,20 +246,17 @@ jobs:
           tar -czf "dist/${ARCHIVE_NAME}" -C staging .
           echo "archive=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Create `latest` alias (non-prerelease only)
+      - name: Create `latest` alias
         working-directory: dist
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]] \
-             && [[ "${GITHUB_REF_NAME}" != *"-rc"* ]] \
-             && [[ "${GITHUB_REF_NAME}" != *"-beta"* ]] \
-             && [[ "${GITHUB_REF_NAME}" != *"-alpha"* ]]; then
-            cp "${{ steps.tarball.outputs.archive }}" "ctx-latest-aarch64-apple-darwin.tar.gz"
-            echo "created ctx-latest-aarch64-apple-darwin.tar.gz alias"
-          else
-            echo "skipping latest-* alias (prerelease or workflow_dispatch)"
-          fi
+          # Always emit the latest-alias — tag pushes and push-to-main both
+          # produce real releases that users can pull via `releases/latest/download/`.
+          # workflow_dispatch still cuts a draft (see below), so aliasing is
+          # harmless there.
+          cp "${{ steps.tarball.outputs.archive }}" "ctx-latest-aarch64-apple-darwin.tar.gz"
+          echo "created ctx-latest-aarch64-apple-darwin.tar.gz alias"
 
       - name: Generate SHA256SUMS
         working-directory: dist
@@ -265,11 +266,17 @@ jobs:
         id: release_meta
         shell: bash
         run: |
+          # Tag push:        real release, draft=false
+          # Push to main:    real release, draft=false (auto-cut on every push)
+          # workflow_dispatch: draft release for manual testing
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "draft=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            echo "tag=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ steps.version.outputs.version }}-rc-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ steps.version.outputs.version }}-dispatch-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
             echo "draft=true" >> "$GITHUB_OUTPUT"
           fi
 
