@@ -6,7 +6,15 @@ rust-version.workspace = true
 license-file.workspace = true
 
 [dependencies]
-# filled in per crate in later tasks
+ctx-core = { path = "../core" }
+tree-sitter.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-json.workspace = true
+anyhow.workspace = true
+once_cell.workspace = true
 
 [lints]
 workspace = true

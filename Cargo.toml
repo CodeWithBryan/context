@@ -41,8 +41,9 @@ dirs = "6"
 rmcp = { version = "1", features = ["server", "transport-io"] }
 tree-sitter = "0.23"
 tree-sitter-typescript = "0.23"
-tree-sitter-javascript = "0.25"
-tree-sitter-css = "0.25"
+# Pin grammars to versions whose C parser uses ABI 14, compatible with tree-sitter 0.23.
+tree-sitter-javascript = "0.23.0"
+tree-sitter-css = "0.23.0"
 tree-sitter-html = "0.23"
 tree-sitter-json = "0.24"
 notify = "8"
