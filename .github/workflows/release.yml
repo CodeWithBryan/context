@@ -136,12 +136,17 @@ jobs:
           umask 077
           mkdir -p ~/.apple-keys
           echo "$P8_B64" | base64 -d > ~/.apple-keys/AuthKey.p8
-          # rcodesign needs a combined JSON bundling the API key + identifiers
-          rcodesign --no-config encode-app-store-connect-api-key \
-            -o ~/.apple-keys/api-key.json \
-            "$ISSUER_ID" \
-            "$KEY_ID" \
-            ~/.apple-keys/AuthKey.p8
+          # Build rcodesign's api-key JSON manually — the `encode-app-store-connect-api-key`
+          # subcommand trips over whatever config file rcodesign auto-discovers in CWD
+          # (likely Cargo.toml being mis-interpreted). Constructing the JSON directly
+          # with jq avoids the issue and is equivalent.
+          jq -n \
+            --arg key_id "$KEY_ID" \
+            --arg issuer_id "$ISSUER_ID" \
+            --rawfile pk ~/.apple-keys/AuthKey.p8 \
+            '{key_id: $key_id, issuer_id: $issuer_id, private_key: $pk}' \
+            > ~/.apple-keys/api-key.json
+          chmod 600 ~/.apple-keys/api-key.json
 
       - name: Decode Developer ID signing cert
         shell: bash
@@ -164,14 +169,14 @@ jobs:
           PW_FILE=$(mktemp)
           printf '%s' "$P12_PW" > "$PW_FILE"
           chmod 600 "$PW_FILE"
-          rcodesign --no-config sign \
+          rcodesign --config-file /dev/null sign \
             --p12-file ~/.apple-keys/DeveloperID.p12 \
             --p12-password-file "$PW_FILE" \
             --code-signature-flags runtime \
             unsigned/ctx
           rm "$PW_FILE"
           # Sanity: rcodesign verifies its own signature
-          rcodesign --no-config verify unsigned/ctx
+          rcodesign --config-file /dev/null verify unsigned/ctx
 
       - name: Zip signed binary for notarization
         shell: bash
@@ -187,7 +192,7 @@ jobs:
           # rcodesign polls Apple's REST API until the submission is Accepted
           # or rejected. On this cheap Linux runner ($0.008/min), even a 60-min
           # wait costs <$0.50 worst case.
-          rcodesign --no-config notary-submit \
+          rcodesign --config-file /dev/null notary-submit \
             --api-key-file ~/.apple-keys/api-key.json \
             --wait \
             ctx-for-notary.zip
