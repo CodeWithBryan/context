@@ -70,10 +70,12 @@ Configure these in **Settings → Secrets and variables → Actions** for the
    most of which is macOS notarization.
 
 6. The **GitHub Release** is created automatically with:
-   - Signed + notarized macOS binaries (ARM64 and Intel)
-   - Linux x86_64 binary
+   - Signed + notarized macOS ARM64 binary (Apple Silicon)
    - `SHA256SUMS` file
    - Auto-generated release notes from commit messages
+
+   > Intel Mac and Linux builds are intentionally not published yet. Re-add
+   > them to the matrix in `.github/workflows/release.yml` when needed.
 
 ---
 

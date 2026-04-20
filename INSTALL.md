@@ -5,14 +5,10 @@ Binaries are code-signed and notarized on macOS — no Gatekeeper workaround nee
 
 ---
 
-## Quick install (macOS)
+## Quick install (macOS, Apple Silicon)
 
 ```sh
-# Apple Silicon (M1/M2/M3/M4):
 curl -L https://github.com/CodeWithBryan/context/releases/latest/download/ctx-latest-aarch64-apple-darwin.tar.gz | tar xz
-
-# Intel Mac:
-curl -L https://github.com/CodeWithBryan/context/releases/latest/download/ctx-latest-x86_64-apple-darwin.tar.gz | tar xz
 
 # Move to somewhere on your PATH:
 mv ctx /usr/local/bin/ctx
@@ -23,14 +19,8 @@ mkdir -p ~/.local/bin && mv ctx ~/.local/bin/
 Binaries are signed with a Developer ID Application certificate and notarized by
 Apple, so macOS will run them without any `xattr` workaround.
 
----
-
-## Quick install (Linux x86_64)
-
-```sh
-curl -L https://github.com/CodeWithBryan/context/releases/latest/download/ctx-latest-x86_64-unknown-linux-gnu.tar.gz | tar xz
-mv ctx /usr/local/bin/ctx
-```
+> Only Apple Silicon (M1/M2/M3/M4) is published at this time.
+> Intel Macs and Linux builds are out of scope for Phase 1.
 
 ---
 

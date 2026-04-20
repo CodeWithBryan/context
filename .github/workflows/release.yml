@@ -8,10 +8,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # sccache reads these to use GitHub Actions as a shared compiler cache.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # Build one binary per target on its native runner.
+  # Build the Apple-Silicon binary. Single-target matrix keeps future expansion
+  # (add Intel/Linux later) a one-line change.
   # ─────────────────────────────────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.target }})
@@ -22,12 +26,6 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-14
             strip_cmd: strip -x
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            strip_cmd: strip -x
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-            strip_cmd: strip
 
     runs-on: ${{ matrix.runner }}
 
@@ -38,13 +36,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Restore cargo cache
         uses: Swatinem/rust-cache@v2
@@ -53,6 +50,9 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --bin ctx --target ${{ matrix.target }}
+
+      - name: sccache stats
+        run: sccache --show-stats
 
       - name: Strip binary
         run: ${{ matrix.strip_cmd }} target/${{ matrix.target }}/release/ctx
@@ -90,8 +90,7 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Sign + notarize macOS binaries.
-  # Runs after both macOS build jobs.
+  # Sign + notarize the macOS binary.
   # ─────────────────────────────────────────────────────────────────────────────
   macos-sign:
     name: Sign + Notarize (${{ matrix.target }})
@@ -101,7 +100,6 @@ jobs:
       matrix:
         target:
           - aarch64-apple-darwin
-          - x86_64-apple-darwin
 
     runs-on: macos-14
 
@@ -196,46 +194,33 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Publish the GitHub Release with all signed/verified tarballs.
+  # Publish the GitHub Release with the signed tarball.
   # ─────────────────────────────────────────────────────────────────────────────
   publish:
     name: Publish Release
     needs:
-      - build        # for the Linux artifact
-      - macos-sign   # for the signed macOS artifacts
+      - macos-sign
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ctx-x86_64-unknown-linux-gnu
-          path: dist/
-
       - name: Download signed macOS (ARM64) artifact
         uses: actions/download-artifact@v4
         with:
           name: ctx-aarch64-apple-darwin-signed
           path: dist/
 
-      - name: Download signed macOS (Intel) artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ctx-x86_64-apple-darwin-signed
-          path: dist/
-
-      - name: Create `latest` aliases (non-prerelease only)
+      - name: Create `latest` alias (non-prerelease only)
         working-directory: dist
         shell: bash
         run: |
-          # Copy versioned tarballs to ctx-latest-<target>.tar.gz aliases so
-          # end users can `curl -L .../releases/latest/download/ctx-latest-<target>.tar.gz`
+          # Copy the versioned tarball to ctx-latest-<target>.tar.gz so end
+          # users can `curl -L .../releases/latest/download/ctx-latest-<target>.tar.gz`
           # without knowing the current version number. Only emit aliases
-          # when we're publishing a real (non-draft, non-prerelease) tag.
+          # when publishing a real (non-draft, non-prerelease) tag.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]] && [[ "${GITHUB_REF_NAME}" != *"-rc"* ]] && [[ "${GITHUB_REF_NAME}" != *"-beta"* ]] && [[ "${GITHUB_REF_NAME}" != *"-alpha"* ]]; then
-            for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+            for target in aarch64-apple-darwin; do
               SRC=$(ls ctx-*-${target}.tar.gz 2>/dev/null | head -1)
               if [[ -n "${SRC}" ]]; then
                 cp "${SRC}" "ctx-latest-${target}.tar.gz"
