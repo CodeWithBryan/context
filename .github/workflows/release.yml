@@ -191,6 +191,10 @@ jobs:
           staple: false
           p12_file: cert.p12
           p12_password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          # Hardened runtime is required for notarization.
+          sign_args: |-
+            --code-signature-flags
+            runtime
 
       - name: Install rcodesign CLI
         shell: bash
