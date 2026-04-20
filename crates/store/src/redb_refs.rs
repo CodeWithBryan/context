@@ -240,4 +240,96 @@ impl RefStore for RedbRefStore {
         .await
         .map_err(|e| CtxError::Store(format!("file_hash join: {e}")))?
     }
+
+    // reason: the body is long because it needs two separate table scans (ACTIVE and
+    // SYMBOLS_BY_NAME) inside a single write transaction; splitting into helpers would
+    // require passing the open WriteTransaction across function boundaries, which redb
+    // doesn't support cleanly. The logic is well-commented and follows a consistent pattern.
+    #[allow(clippy::too_many_lines)]
+    async fn clear_file_state(&self, scope: &Scope, file: &str) -> Result<()> {
+        let key = Self::scope_key(scope)?;
+        let db = self.db.clone();
+        let file = file.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let write = db.begin_write().map_err(store_err)?;
+            {
+                // 1. Remove ACTIVE rows whose ChunkRef.file == file.
+                //    Collect hashes to remove first (can't modify table while iterating).
+                let mut active = write.open_table(ACTIVE).map_err(store_err)?;
+                let mut to_remove: Vec<[u8; 32]> = Vec::new();
+                {
+                    let low = [0x00u8; 32];
+                    let high = [0xffu8; 32];
+                    let range_start = (key.as_str(), &low);
+                    let range_end = (key.as_str(), &high);
+                    let iter = active
+                        .range(range_start..=range_end)
+                        .map_err(store_err)?;
+                    for row in iter {
+                        let (k, v) = row.map_err(store_err)?;
+                        let (_, hash) = k.value();
+                        let bytes = v.value();
+                        let chunk_ref: ChunkRef =
+                            serde_json::from_slice(bytes).map_err(store_err)?;
+                        if chunk_ref.file == file {
+                            to_remove.push(*hash);
+                        }
+                    }
+                }
+                for hash in to_remove {
+                    active
+                        .remove((key.as_str(), &hash))
+                        .map_err(store_err)?;
+                }
+
+                // 2. Clear symbols: scan SYMBOLS_BY_NAME and filter out entries in `file`.
+                //    Rewrite rows that still have symbols for other files; delete empty ones.
+                let mut symbols_by_name =
+                    write.open_table(SYMBOLS_BY_NAME).map_err(store_err)?;
+                let mut updates: Vec<(String, Vec<Symbol>)> = Vec::new();
+                let mut deletions: Vec<String> = Vec::new();
+                {
+                    // Range covers all entries with this scope prefix.
+                    // "\u{10ffff}" is the highest valid Unicode scalar — chosen so that
+                    // (key, "\u{10ffff}") is lexicographically >= any real symbol name.
+                    let low_key = (key.as_str(), "");
+                    let high_key = (key.as_str(), "\u{10ffff}");
+                    let iter = symbols_by_name
+                        .range(low_key..=high_key)
+                        .map_err(store_err)?;
+                    for row in iter {
+                        let (k, v) = row.map_err(store_err)?;
+                        let (_, name) = k.value();
+                        let stored: Vec<Symbol> =
+                            serde_json::from_slice(v.value()).map_err(store_err)?;
+                        let filtered: Vec<Symbol> = stored
+                            .into_iter()
+                            .filter(|s| s.file != file)
+                            .collect();
+                        if filtered.is_empty() {
+                            deletions.push(name.to_string());
+                        } else {
+                            updates.push((name.to_string(), filtered));
+                        }
+                    }
+                }
+                for name in deletions {
+                    symbols_by_name
+                        .remove((key.as_str(), name.as_str()))
+                        .map_err(store_err)?;
+                }
+                for (name, filtered) in updates {
+                    let bytes = serde_json::to_vec(&filtered).map_err(store_err)?;
+                    symbols_by_name
+                        .insert((key.as_str(), name.as_str()), bytes.as_slice())
+                        .map_err(store_err)?;
+                }
+            }
+            write.commit().map_err(store_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| CtxError::Store(format!("clear_file_state join: {e}")))??;
+        Ok(())
+    }
 }

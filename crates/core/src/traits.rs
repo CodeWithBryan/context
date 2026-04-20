@@ -46,6 +46,10 @@ pub trait RefStore: Send + Sync {
     async fn symbols(&self, scope: &Scope, q: SymbolQuery) -> Result<Vec<Symbol>>;
     async fn record_file_hash(&self, scope: &Scope, file: &str, hash: ContentHash) -> Result<()>;
     async fn file_hash(&self, scope: &Scope, file: &str) -> Result<Option<ContentHash>>;
+    /// Remove all refs and all symbols associated with `file` in `scope`.
+    /// Called by the indexing pipeline before re-binding a changed file so
+    /// stale entries from the previous content don't leak into queries.
+    async fn clear_file_state(&self, scope: &Scope, file: &str) -> Result<()>;
 }
 
 #[async_trait]

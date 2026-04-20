@@ -68,10 +68,14 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             }
             match self.index_file(scope, path).await {
                 Ok(r) => {
-                    report.files_indexed += 1;
-                    report.chunks_upserted += r.chunks_upserted;
-                    report.chunks_embedded += r.chunks_embedded;
-                    report.symbols_upserted += r.symbols_upserted;
+                    if r.skipped {
+                        report.files_skipped += 1;
+                    } else {
+                        report.files_indexed += 1;
+                        report.chunks_upserted += r.chunks_upserted;
+                        report.chunks_embedded += r.chunks_embedded;
+                        report.symbols_upserted += r.symbols_upserted;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("index {}: {e}", path.display());
@@ -103,10 +107,14 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
             }
             match self.index_file(scope, path).await {
                 Ok(r) => {
-                    report.files_indexed += 1;
-                    report.chunks_upserted += r.chunks_upserted;
-                    report.chunks_embedded += r.chunks_embedded;
-                    report.symbols_upserted += r.symbols_upserted;
+                    if r.skipped {
+                        report.files_skipped += 1;
+                    } else {
+                        report.files_indexed += 1;
+                        report.chunks_upserted += r.chunks_upserted;
+                        report.chunks_embedded += r.chunks_embedded;
+                        report.symbols_upserted += r.symbols_upserted;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("incremental {}: {e}", path.display());
@@ -126,9 +134,14 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
         // Skip if the file content hash is unchanged since last index.
         if let Ok(Some(prev)) = self.refs.file_hash(scope, &file_str).await {
             if prev == file_hash {
-                return Ok(FileReport::default());
+                return Ok(FileReport { skipped: true, ..Default::default() });
             }
         }
+
+        // Re-indexing: wipe stale refs + symbols for this file FIRST so that
+        // shrinking a file doesn't leave orphaned chunk refs in the active set,
+        // and repeated indexing doesn't duplicate symbols.
+        self.refs.clear_file_state(scope, &file_str).await?;
 
         let chunks = ctx_parse::Chunker::new().chunk(&file_str, &bytes)?;
         if chunks.is_empty() {
@@ -140,6 +153,9 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
         }
 
         // Per-chunk dedup: only embed chunks not already stored.
+        // TODO(perf): this does N async calls to ChunkStore::get for a file with N chunks.
+        // Add `ChunkStore::contains_hashes(&[ContentHash]) -> Result<HashSet<ContentHash>>`
+        // to the trait and use it here for a single-call batch check.
         let mut to_embed: Vec<usize> = Vec::new();
         for (i, c) in chunks.iter().enumerate() {
             let exists = self.chunks.get(&c.hash).await?.is_some();
@@ -200,6 +216,7 @@ impl<C: ChunkStore, R: RefStore, E: Embedder> Pipeline<C, R, E> {
 
 #[derive(Default)]
 struct FileReport {
+    skipped: bool,
     chunks_upserted: u64,
     chunks_embedded: u64,
     symbols_upserted: u64,
