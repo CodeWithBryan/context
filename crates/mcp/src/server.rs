@@ -164,29 +164,24 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
                     .map(|h| {
                         let c = &h.chunk;
                         let text = c.text.as_str();
-                        let (preview, truncated) = if text.len() > PREVIEW_LEN {
-                            // Walk backward to a char boundary; .chars().take(N) would
-                            // count chars, which is fine but slightly slower. Slice by
-                            // byte with a boundary check is cheap.
+                        // Ellipsis inside the preview signals truncation —
+                        // no separate `truncated` field needed.
+                        let preview = if text.len() > PREVIEW_LEN {
                             let mut end = PREVIEW_LEN;
                             while end > 0 && !text.is_char_boundary(end) {
                                 end -= 1;
                             }
-                            (&text[..end], true)
+                            format!("{}…", &text[..end])
                         } else {
-                            (text, false)
+                            text.to_string()
                         };
                         serde_json::json!({
-                            "score": h.score,
                             "file": c.file,
-                            "line_start": c.line_range.start,
-                            "line_end": c.line_range.end,
-                            "kind": format!("{:?}", c.kind),
-                            "lang": format!("{:?}", c.lang),
+                            "lines": format!("{}-{}", c.line_range.start, c.line_range.end),
                             "name": c.name,
+                            "score": h.score,
                             "hash": c.hash.to_hex(),
                             "preview": preview,
-                            "truncated": truncated,
                         })
                     })
                     .collect();
@@ -242,18 +237,15 @@ impl<C: ChunkStore + 'static, R: RefStore + 'static, E: Embedder + 'static> CtxM
         };
         match self.router.get_chunk(hash).await {
             Ok(Some(c)) => serde_json::json!({
-                "hash": c.hash.to_hex(),
                 "file": c.file,
-                "line_start": c.line_range.start,
-                "line_end": c.line_range.end,
-                "byte_start": c.byte_range.start,
-                "byte_end": c.byte_range.end,
-                "kind": format!("{:?}", c.kind),
-                "lang": format!("{:?}", c.lang),
+                "lines": format!("{}-{}", c.line_range.start, c.line_range.end),
                 "name": c.name,
+                "hash": c.hash.to_hex(),
                 "text": c.text,
-                // Intentionally omit `vector` — 768-dim embedding is useless
-                // to an MCP client and was blowing up token budgets.
+                // Intentionally omitted (noise for LLM consumers):
+                // - vector (768-float embedding)
+                // - byte_start / byte_end (internal chunker offsets)
+                // - kind / lang (derivable from file extension and text)
             })
             .to_string(),
             Ok(None) => serde_json::json!({"error": "chunk not found"}).to_string(),
