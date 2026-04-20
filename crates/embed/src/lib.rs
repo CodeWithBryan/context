@@ -2,4 +2,4 @@
 
 mod fastembed;
 
-pub use fastembed::FastembedEmbedder;
+pub use fastembed::{EmbedderOptions, FastembedEmbedder};

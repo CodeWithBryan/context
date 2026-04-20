@@ -7,6 +7,7 @@ license-file.workspace = true
 
 [dependencies]
 ctx-core = { path = "../core" }
+dirs.workspace = true
 fastembed.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
