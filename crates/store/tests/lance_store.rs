@@ -109,3 +109,53 @@ async fn search_honors_hash_allowlist() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].chunk.hash, ContentHash([8; 32]));
 }
+
+#[tokio::test]
+async fn upsert_rejects_wrong_dim_vector() {
+    let dir = tempdir().unwrap();
+    let store = LanceChunkStore::open(dir.path(), 4).await.unwrap();
+    let bad = chunk(10, "x", vec![1.0, 2.0]); // dim = 2, store expects 4
+    let err = store.upsert(&[bad]).await.expect_err("mismatched dim");
+    assert!(matches!(err, ctx_core::CtxError::Store(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn search_rejects_wrong_query_dim() {
+    let dir = tempdir().unwrap();
+    let store = LanceChunkStore::open(dir.path(), 4).await.unwrap();
+    let err = store
+        .search(&[1.0, 2.0], 1, &ctx_core::traits::Filter::default())
+        .await
+        .expect_err("mismatched query dim");
+    assert!(matches!(err, ctx_core::CtxError::Store(_)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn reopen_same_dim_preserves_rows() {
+    let dir = tempdir().unwrap();
+    {
+        let store = LanceChunkStore::open(dir.path(), 4).await.unwrap();
+        store.upsert(&[chunk(11, "persist-me", vec![0.1, 0.2, 0.3, 0.4])]).await.unwrap();
+        assert_eq!(store.count().await.unwrap(), 1);
+    }
+    // Drop and reopen
+    let store2 = LanceChunkStore::open(dir.path(), 4).await.unwrap();
+    assert_eq!(store2.count().await.unwrap(), 1);
+    let got = store2.get(&ContentHash([11; 32])).await.unwrap();
+    assert!(got.is_some());
+}
+
+#[tokio::test]
+async fn reopen_different_dim_errors() {
+    let dir = tempdir().unwrap();
+    {
+        let _store = LanceChunkStore::open(dir.path(), 4).await.unwrap();
+    }
+    // Reopen with different dim — should error.
+    // LanceChunkStore doesn't implement Debug so we can't use expect_err/unwrap_err;
+    // match instead.
+    match LanceChunkStore::open(dir.path(), 8).await {
+        Err(e) => assert!(matches!(e, ctx_core::CtxError::Store(_)), "got: {e:?}"),
+        Ok(_) => panic!("expected dim mismatch error, but open succeeded"),
+    }
+}

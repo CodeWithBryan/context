@@ -30,6 +30,7 @@ use ctx_core::traits::{ChunkStore, Filter};
 use ctx_core::types::{ByteRange, LineRange};
 use ctx_core::{Chunk, ChunkKind, ContentHash, CtxError, Hit, Language, Result};
 use futures::TryStreamExt;
+use lancedb::Error as LanceError;
 use lancedb::connection::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
@@ -147,17 +148,53 @@ impl LanceChunkStore {
         let schema: SchemaRef = Arc::new(chunk_schema(dim));
 
         let table = match conn.open_table(TABLE_NAME).execute().await {
-            Ok(t) => t,
-            Err(_) => {
+            Ok(t) => {
+                // Validate that the stored table's vector dimension matches the
+                // requested dim — fail fast rather than deferring to the first
+                // query that would produce a confusing type mismatch.
+                let existing = t
+                    .schema()
+                    .await
+                    .map_err(|e| CtxError::Store(format!("read existing schema: {e}")))?;
+                validate_schema_dim(&existing, dim)?;
+                t
+            }
+            Err(LanceError::TableNotFound { .. }) => {
                 // Table doesn't exist yet — create empty with our schema.
                 conn.create_empty_table(TABLE_NAME, schema.clone())
                     .execute()
                     .await
                     .map_err(|e| CtxError::Store(format!("create_empty_table: {e}")))?
             }
+            Err(e) => return Err(CtxError::Store(format!("open_table: {e}"))),
         };
 
         Ok(Self { _conn: conn, table, dim, schema })
+    }
+}
+
+// ── Schema validation ─────────────────────────────────────────────────────────
+
+/// Verify that `schema` contains a `vector` column whose `FixedSizeList` inner
+/// length equals `expected_dim`. Returns `CtxError::Store` on any mismatch.
+fn validate_schema_dim(schema: &Schema, expected_dim: usize) -> Result<()> {
+    let field = schema
+        .field_with_name("vector")
+        .map_err(|e| CtxError::Store(format!("existing table missing 'vector' column: {e}")))?;
+    match field.data_type() {
+        DataType::FixedSizeList(_, len) => {
+            let stored = usize::try_from(*len)
+                .map_err(|_| CtxError::Store(format!("stored vector dim {len} is invalid")))?;
+            if stored != expected_dim {
+                return Err(CtxError::Store(format!(
+                    "existing table vector dim {stored} != requested dim {expected_dim}"
+                )));
+            }
+            Ok(())
+        }
+        other => Err(CtxError::Store(format!(
+            "existing 'vector' column has wrong type: {other:?}"
+        ))),
     }
 }
 
@@ -237,6 +274,15 @@ impl ChunkStore for LanceChunkStore {
             .await
             .map_err(|e| CtxError::Store(format!("collect: {e}")))?;
 
+        // Filter application policy (Phase 1):
+        //   - hash_allowlist: honored (client-side post-filter below)
+        //   - lang_allowlist: honored (client-side post-filter below)
+        //   - scope:          NOT enforced server-side. Callers must pass
+        //                     `hash_allowlist = RefStore::active_hashes(scope)?` to
+        //                     enforce scope isolation. This is a security-relevant
+        //                     contract — Task 10 Router is the single enforcement
+        //                     point for this pattern.
+        //   - path_glob:      NOT applied in Phase 1 (deferred to Task 8+).
         let mut hits: Vec<Hit> = Vec::new();
 
         'outer: for batch in &batches {
